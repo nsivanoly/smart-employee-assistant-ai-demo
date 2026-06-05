@@ -25,11 +25,11 @@ volumes:
 services:
   wso2is:
     build:
-      context: ./wso2-is-pack
+      context: ./wso2-is
       dockerfile: Dockerfile
       args:
         # WSO2 IS version (>= 7.3.0). The matching wso2is-<version>.zip must be
-        # present in wso2-is-pack/. Override via env: WSO2IS_VERSION=7.4.0 ./start.sh
+        # present in wso2-is/pack/. Override via env: WSO2IS_VERSION=7.4.0 ./start.sh
         WSO2IS_VERSION: ${WSO2IS_VERSION:-7.3.0}
     environment:
       - BOOTSTRAP_ON_START=${WSO2_BOOTSTRAP_ON_START:-true}

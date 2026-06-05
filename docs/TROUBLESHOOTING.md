@@ -3,13 +3,13 @@
 Symptom → cause → fix. Most issues here were hit during bring-up and are now
 prevented by the bootstrap, but they recur if the environment drifts.
 
-## Build fails: `COPY wso2is-<version>.zip … not found` / `"/wso2is-7.3.0.zip": not found`
-**Cause:** the WSO2 IS pack isn't in `wso2-is-pack/`, or its filename doesn't match the
-configured version.
-**Fix:** download `wso2is-<version>.zip` (≥ 7.3.0) into `wso2-is-pack/` (keep the
+## Build fails: `COPY pack/wso2is-<version>.zip … not found` / `"/pack/wso2is-7.3.0.zip": not found`
+**Cause:** the WSO2 IS pack isn't in `wso2-is/pack/`, or its filename doesn't match
+the configured version.
+**Fix:** download `wso2is-<version>.zip` (≥ 7.3.0) into `wso2-is/pack/` (keep the
 original filename). If it's not 7.3.0, set the version to match the file — either
 `WSO2IS_VERSION=7.4.0 ./start.sh` or edit `ARG WSO2IS_VERSION` in
-`wso2-is-pack/Dockerfile`. Verify: `ls wso2-is-pack/wso2is-*.zip`.
+`wso2-is/Dockerfile`. Verify: `ls wso2-is/pack/wso2is-*.zip`.
 
 ## WSO2 IS container exits with `Killed` (OOM)
 **Cause:** the Docker VM has too little RAM; the IS JVM is OOM-killed (`OOMKilled: true`).
@@ -67,8 +67,8 @@ stock v1.1.6, re-apply the recompile (see [UAEPASS.md](UAEPASS.md)).
 
 ## Slow image builds
 **Cause:** the ~400 MB IS zip being sent as build context to every service.
-**Fix:** already handled — `wso2is` uses context `./wso2-is-pack` and `.dockerignore`
-excludes `wso2-is-pack/`. Confirm the Python build context is small
+**Fix:** already handled — `wso2is` uses context `./wso2-is` and `.dockerignore`
+excludes `wso2-is/`. Confirm the Python build context is small
 (`du -sh apps libs` ≈ a few MB).
 
 ## Edits not taking effect in dev

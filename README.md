@@ -48,7 +48,7 @@ Browser SPA ──(BFF login, Pattern C)──► Orchestrator ──A2A──�
 | **Memory** | The container VM needs **≥ 8 GB** — WSO2 IS alone needs ~1.5–2 GB. On Colima: `colima start --memory 8 --cpu 4`. |
 | **`docker compose`** or **`docker-compose`** | `start.sh` auto-detects either. |
 | **Outbound internet** | Required for image pulls, LLM calls, and (optionally) UAEPass staging. |
-| **The WSO2 IS pack** | You must **download** the IS distribution zip and place it in `wso2-is-pack/` — see below. It is **git-ignored** (~400 MB, too large to commit). |
+| **The WSO2 IS pack** | You must **download** the IS distribution zip and place it in `wso2-is/` — see below. It is **git-ignored** (~400 MB, too large to commit). |
 
 Optional (only if `LLM_FALLBACK_MODE=llm`): an OpenAI-compatible API key. The default
 mode is `keyword`, which needs no LLM.
@@ -60,25 +60,25 @@ The build needs the IS distribution zip. **Version must be 7.3.0 or newer.**
 1. Download `wso2is-<version>.zip` from one of:
    - https://wso2.com/identity-server/
    - https://github.com/wso2/product-is/releases
-2. Place it **inside `wso2-is-pack/`** keeping the original filename, e.g.:
+2. Place it **inside `wso2-is/pack/`** keeping the original filename, e.g.:
    ```
-   wso2-is-pack/wso2is-7.3.0.zip      # default
-   wso2-is-pack/wso2is-7.4.0.zip      # a newer release
+   wso2-is/pack/wso2is-7.3.0.zip      # default
+   wso2-is/pack/wso2is-7.4.0.zip      # a newer release
    ```
 3. **If you use a version other than 7.3.0**, set the version so the build picks the
    right file — either:
    - **env override (no edits):** `WSO2IS_VERSION=7.4.0 ./start.sh`, or
    - **edit the Dockerfile directly:** change the one line in
-     `wso2-is-pack/Dockerfile`:
+     `wso2-is/Dockerfile`:
      ```dockerfile
      ARG WSO2IS_VERSION=7.4.0
      ```
-   That single value drives both the `COPY wso2is-<version>.zip` and the unpack step —
-   nothing else to change.
+   That single value drives both the `COPY pack/wso2is-<version>.zip` and the unpack
+   step — nothing else to change.
 
 ```bash
 # verify the pack is in place before starting
-ls wso2-is-pack/wso2is-*.zip
+ls wso2-is/pack/wso2is-*.zip
 ```
 
 > The UAEPass connector in this repo is recompiled for IS 7.3 / Nimbus 10. If a much
@@ -90,9 +90,9 @@ ls wso2-is-pack/wso2is-*.zip
 ## Quick start
 
 ```bash
-# 1. Download the WSO2 IS pack (>= 7.3.0) into wso2-is-pack/ — see
+# 1. Download the WSO2 IS pack (>= 7.3.0) into wso2-is/pack/ — see
 #    "Download the WSO2 Identity Server pack" above. Verify:
-ls wso2-is-pack/wso2is-*.zip
+ls wso2-is/pack/wso2is-*.zip
 
 # 2. Start everything (builds images, boots WSO2 IS, runs bootstrap,
 #    generates env files, then starts the full stack)
@@ -328,11 +328,14 @@ srt-emp/
 │   ├── it_server/        # IT resource server: MCP tools + REST, F-04 JWT validator, in-memory store
 │   └── client/           # SPA source (app.js/index.html/styles.css) — served BY the orchestrator
 ├── libs/common/          # Shared: a2a/, auth/ (CIBA, JWT, actor tokens, peer trust), logging, revocation
-├── wso2-is-pack/         # IS Dockerfile (ARG WSO2IS_VERSION), entrypoint, UAEPass connector + assets
-│                         #   ↳ download wso2is-<version>.zip here (>= 7.3.0; gitignored)
-├── scripts/              # bootstrap-wso2is-entrypoint.sh, render-envs / generate-master-env
+├── wso2-is/         # IS image build context (multi-stage Dockerfile, ARG WSO2IS_VERSION)
+│   ├── pack/             #   ↳ download wso2is-<version>.zip here (>= 7.3.0; gitignored)
+│   ├── uaepass/          #   UAEPass connector JAR, error JSP, logo (committed build inputs)
+│   └── entrypoint/       #   custom-entrypoint.sh (starts IS + runs bootstrap)
+├── scripts/              # bootstrap-wso2is-entrypoint.sh, render-envs / generate-master-env,
+│                         #   grep-trace.sh, lib/common.sh (shared bash helpers)
 ├── config/               # master.env(.template)
-├── docs/                 # architecture, UAEPass, troubleshooting
+├── docs/                 # architecture, API reference, UAEPass, troubleshooting
 ├── docker-compose.yml    # base stack
 ├── docker-compose.override.yml  # dev override (committed; auto-merged in dev)
 ├── start.sh / stop.sh
@@ -350,7 +353,7 @@ Highlights:
 - **Reports show "Sign in to view reports."** → stale session cookie; hard-refresh / re-login.
 - **403 `insufficient_scope`** → token-A lacks role scopes; re-login (esp. after a clean start).
 - **Consent window shows a login page** → the agent app needs the federated session; covered in docs.
-- **Build is slow** → ensure `wso2-is-pack/` is excluded from the Python build context (it is, via `.dockerignore`).
+- **Build is slow** → ensure `wso2-is/` is excluded from the Python build context (it is, via `.dockerignore`).
 - **SPA shows `Unexpected end of input` / broken logo after an edit** → macOS/Colima bind-mount served a truncated client file; `docker compose restart orchestrator` re-syncs the mount.
 - **Agents panel empty after a reload** → fixed: the issued-token log is now persisted; run one new agent action to repopulate if it was minted before the upgrade.
 
@@ -359,5 +362,7 @@ Highlights:
 ## Further docs
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — services, auth flows (Pattern C, CIBA, MCP/F-04), A2A chain, identity model, build optimization.
+- **[docs/API.md](docs/API.md)** — full HTTP API reference: every orchestrator, agent, and resource-server route, with auth and required scopes.
 - **[docs/UAEPASS.md](docs/UAEPASS.md)** — UAEPass federation setup, JIT role mapping, connector compatibility, branding.
 - **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — symptom → cause → fix.
+- **[apps/client/README.md](apps/client/README.md)** — the browser SPA: how it's served, the Pattern C flow, and dev tips.

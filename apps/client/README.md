@@ -16,7 +16,7 @@ So there is **no separate client container and no port 3001** — bring up the
 stack and open the orchestrator:
 
 ```bash
-./scripts/demo-up.sh
+./start.sh
 # then open:
 open http://localhost:8090
 ```
@@ -34,13 +34,11 @@ docker compose build orchestrator
 docker compose up -d orchestrator
 ```
 
-(For tight iteration you can instead run the orchestrator from source so it
-serves the live `client/` files; see the orchestrator README / `main.py`.)
-
-> **`serve.py` is legacy.** The `apps/client/serve.py` standalone dev server is a
-> pre-v4 leftover still wired to the old Asgardeo SPA flow and the removed
-> `agent:5001` backend. It is **not** part of the current architecture and is
-> not used by the demo. Use the orchestrator-served path above.
+For tight iteration in dev, the committed `docker-compose.override.yml` mounts
+`apps/client/` into the orchestrator container, so SPA edits are picked up on a
+browser refresh (cache-bust via the `?v=` query string in `index.html`); if a
+truncated file is served after an edit, `docker compose restart orchestrator`
+re-syncs the bind mount.
 
 ## Auth flow (Pattern C)
 

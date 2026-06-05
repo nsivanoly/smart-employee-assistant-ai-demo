@@ -1,8 +1,25 @@
 #!/usr/bin/env bash
+#
+# start.sh — interactive bring-up for the full srt-emp stack.
+#
+# Flow:
+#   1. Prompt for a build mode (cache / no-cache / skip) and a cleanup mode.
+#   2. Boot WSO2 IS first; its container entrypoint runs the bootstrap that
+#      provisions OAuth apps, scopes, roles, demo users and the UAEPass IdP.
+#   3. Generate config/master.env from the live IS state, prompt for external
+#      secrets (LLM / AMP keys), then render each service's .env from it.
+#   4. Build + (re)create the five Python services and verify that the secrets
+#      rendered into each .env actually reached the running container.
+#
+# Env overrides: WSO2IS_VERSION, IS_ADMIN_USER/PASS, RUN_MANUAL_BOOTSTRAP=1.
+# Shared helpers (compose detection, env read/write) live in scripts/lib/common.sh.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
+
+# shellcheck source=scripts/lib/common.sh
+source "$ROOT_DIR/scripts/lib/common.sh"
 
 MASTER_TEMPLATE="$ROOT_DIR/config/master.env.template"
 MASTER_ENV="$ROOT_DIR/config/master.env"
@@ -13,27 +30,7 @@ IT_AGENT_ENV="$ROOT_DIR/apps/it_agent/.env"
 IS_ADMIN_USER="${IS_ADMIN_USER:-admin}"
 IS_ADMIN_PASS="${IS_ADMIN_PASS:-admin}"
 
-COMPOSE_CMD=()
-
-detect_compose_cmd() {
-  if docker compose version >/dev/null 2>&1; then
-    COMPOSE_CMD=(docker compose)
-  elif command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE_CMD=(docker-compose)
-  else
-    echo "docker compose or docker-compose is required" >&2
-    exit 1
-  fi
-}
-
-compose_cmd() {
-  "${COMPOSE_CMD[@]}" "$@"
-}
-
-if ! command -v docker >/dev/null 2>&1; then
-  echo "docker is not installed or not on PATH" >&2
-  exit 1
-fi
+require_docker
 
 if ! docker info >/dev/null 2>&1; then
   if command -v colima >/dev/null 2>&1; then
@@ -45,52 +42,25 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 
-detect_compose_cmd
+detect_compose_cmd || exit 1
 
-upsert_env_value() {
-  local env_file="$1"
-  local key="$2"
-  local value="$3"
-  if grep -qE "^${key}=" "$env_file"; then
-    sed -i.bak "s|^${key}=.*|${key}=${value}|" "$env_file" && rm -f "${env_file}.bak"
-  else
-    echo "${key}=${value}" >> "$env_file"
-  fi
-}
-
-read_env_value() {
-  local key="$1"
-  local file="$2"
-  [[ -f "$file" ]] || return 1
-  local value
-  value="$(grep -E "^${key}=" "$file" | tail -n1 | cut -d'=' -f2- || true)"
-  value="${value%\r}"
-  value="${value#\"}"
-  value="${value%\"}"
-  value="${value#\'}"
-  value="${value%\'}"
-  [[ -n "$value" ]] || return 1
-  echo "$value"
-}
-
+# Prompt for an optional master.env value, defaulting to the current value
+# (Enter keeps it). Writes the result back to master.env.
 prompt_value() {
   local key="$1"
   local prompt_text="$2"
-  local current default answer
-  current="$(read_env_value "$key" "$MASTER_ENV" || true)"
-  default="${current}"
+  local default answer
+  default="$(read_env "$key" "$MASTER_ENV" || true)"
   read -r -p "$prompt_text [${default:-empty}]: " answer
-  if [[ -z "$answer" ]]; then
-    answer="$default"
-  fi
-  upsert_env_value "$MASTER_ENV" "$key" "$answer"
+  upsert_env "$MASTER_ENV" "$key" "${answer:-$default}"
 }
 
+# Prompt for a mandatory master.env value, re-asking until non-empty.
 ensure_required_value() {
   local key="$1"
   local prompt_text="$2"
   local current answer
-  current="$(read_env_value "$key" "$MASTER_ENV" || true)"
+  current="$(read_env "$key" "$MASTER_ENV" || true)"
   while [[ -z "$current" ]]; do
     read -r -p "$prompt_text [required]: " answer
     answer="${answer//$'\r'/}"
@@ -98,11 +68,13 @@ ensure_required_value() {
       echo "$key is required." >&2
       continue
     fi
-    upsert_env_value "$MASTER_ENV" "$key" "$answer"
+    upsert_env "$MASTER_ENV" "$key" "$answer"
     current="$answer"
   done
 }
 
+# Block until IS serves JWKS and the bootstrap has dropped its ready marker,
+# or until max_wait elapses (returns 1 on timeout).
 wait_for_wso2() {
   local max_wait=300
   local deadline=$((SECONDS + max_wait))
@@ -119,6 +91,8 @@ wait_for_wso2() {
   return 1
 }
 
+# Phase 1: bring up only the WSO2 IS container (per the chosen build mode) so
+# its entrypoint can bootstrap before the app services need its OAuth clients.
 start_wso2_only() {
   local build_mode="$1"
   # Clear stale marker so readiness reflects the current startup/bootstrap cycle.
@@ -137,6 +111,8 @@ start_wso2_only() {
   esac
 }
 
+# Phase 2: build (per build mode) and force-recreate the five Python services
+# after their .env files are rendered, so the new env values are picked up.
 start_full_stack() {
   local build_mode="$1"
   local app_services=(orchestrator hr_agent it_agent hr_server it_server)
@@ -159,50 +135,34 @@ start_full_stack() {
   esac
 }
 
-env_file_value() {
-  local file="$1"
-  local key="$2"
-  [[ -f "$file" ]] || return 1
-  grep -E "^${key}=" "$file" | tail -n1 | cut -d'=' -f2-
-}
-
+# Read an env var as seen inside a running service container (printenv).
 container_env_value() {
   local service="$1"
   local key="$2"
   compose_cmd exec -T "$service" /bin/sh -lc "printenv $key 2>/dev/null || true"
 }
 
+# Confirm each service container actually received the secret rendered into its
+# .env (catches stale containers that weren't recreated after a regen).
 verify_runtime_env_sync() {
-  local expected actual
-
-  expected="$(env_file_value "$ORCH_ENV" "ORCHESTRATOR_MCP_CLIENT_SECRET" || true)"
-  actual="$(container_env_value orchestrator "ORCHESTRATOR_MCP_CLIENT_SECRET")"
-  if [[ -n "$expected" && "$expected" != "$actual" ]]; then
-    echo "runtime env mismatch: orchestrator ORCHESTRATOR_MCP_CLIENT_SECRET" >&2
-    return 1
-  fi
-
-  expected="$(env_file_value "$ORCH_ENV" "ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET" || true)"
-  actual="$(container_env_value orchestrator "ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET")"
-  if [[ -n "$expected" && "$expected" != "$actual" ]]; then
-    echo "runtime env mismatch: orchestrator ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET" >&2
-    return 1
-  fi
-
-  expected="$(env_file_value "$HR_AGENT_ENV" "HR_AGENT_OAUTH_CLIENT_SECRET" || true)"
-  actual="$(container_env_value hr_agent "HR_AGENT_OAUTH_CLIENT_SECRET")"
-  if [[ -n "$expected" && "$expected" != "$actual" ]]; then
-    echo "runtime env mismatch: hr_agent HR_AGENT_OAUTH_CLIENT_SECRET" >&2
-    return 1
-  fi
-
-  expected="$(env_file_value "$IT_AGENT_ENV" "IT_AGENT_OAUTH_CLIENT_SECRET" || true)"
-  actual="$(container_env_value it_agent "IT_AGENT_OAUTH_CLIENT_SECRET")"
-  if [[ -n "$expected" && "$expected" != "$actual" ]]; then
-    echo "runtime env mismatch: it_agent IT_AGENT_OAUTH_CLIENT_SECRET" >&2
-    return 1
-  fi
-
+  # rows: "<service> <env-file> <key>"
+  local rows=(
+    "orchestrator $ORCH_ENV ORCHESTRATOR_MCP_CLIENT_SECRET"
+    "orchestrator $ORCH_ENV ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET"
+    "hr_agent $HR_AGENT_ENV HR_AGENT_OAUTH_CLIENT_SECRET"
+    "it_agent $IT_AGENT_ENV IT_AGENT_OAUTH_CLIENT_SECRET"
+  )
+  local row service env_file key expected actual
+  for row in "${rows[@]}"; do
+    read -r service env_file key <<<"$row"
+    expected="$(read_env "$key" "$env_file" || true)"
+    [[ -n "$expected" ]] || continue
+    actual="$(container_env_value "$service" "$key")"
+    if [[ "$expected" != "$actual" ]]; then
+      echo "runtime env mismatch: $service $key" >&2
+      return 1
+    fi
+  done
   return 0
 }
 

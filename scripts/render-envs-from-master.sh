@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
+#
+# render-envs-from-master.sh — fan config/master.env out into each service .env.
+#
+#   ./scripts/render-envs-from-master.sh [master-env]   # default config/master.env
+#
+# Sources master.env, then upserts the per-service WSO2 URLs, client IDs/secrets,
+# audiences, trusted-peer lists and feature flags into apps/*/.env (creating each
+# from its .env.example when missing). Derived defaults (e.g. resource-server REST
+# audiences from the orchestrator MCP client id) keep the services in sync after a
+# bootstrap regenerates IDs. Idempotent: safe to re-run. The legacy standalone
+# client SPA is intentionally not rendered (the orchestrator serves the SPA).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# shellcheck source=lib/common.sh
+source "$ROOT_DIR/scripts/lib/common.sh"
+
 MASTER_ENV="${1:-$ROOT_DIR/config/master.env}"
 
 if [[ ! -f "$MASTER_ENV" ]]; then
@@ -14,25 +29,8 @@ set -a
 source "$MASTER_ENV"
 set +a
 
-upsert() {
-  local file="$1"
-  local key="$2"
-  local value="$3"
-  if grep -qE "^${key}=" "$file"; then
-    sed -i.bak "s|^${key}=.*|${key}=${value}|" "$file" && rm -f "$file.bak"
-  else
-    echo "${key}=${value}" >> "$file"
-  fi
-}
-
-upsert_if_nonempty() {
-  local file="$1"
-  local key="$2"
-  local value="$3"
-  [[ -n "$value" ]] || return 0
-  upsert "$file" "$key" "$value"
-}
-
+# Create a service .env from its .env.example (or an empty file) only if absent;
+# never clobbers an existing .env.
 ensure_file_from_example_if_missing() {
   local file="$1"
   local example="$2"
@@ -64,89 +62,89 @@ PUBLIC_URL="${MASTER_ORCHESTRATOR_PUBLIC_URL:-http://localhost:8090}"
 ALLOWED_ORIGINS="${MASTER_ALLOWED_ORIGINS:-http://localhost:8090,http://127.0.0.1:8090}"
 
 # orchestrator
-upsert "$ORCH_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
-upsert "$ORCH_ENV" WSO2_IS_BROWSER_BASE_URL "$HOST_BASE_URL"
-upsert "$ORCH_ENV" WSO2_IS_ISSUER "$SERVICE_BASE_URL/oauth2/token"
-upsert "$ORCH_ENV" WSO2_IS_JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
-upsert "$ORCH_ENV" IDP_INSECURE_TLS "${MASTER_IDP_INSECURE_TLS:-1}"
-upsert_if_nonempty "$ORCH_ENV" ORCHESTRATOR_MCP_CLIENT_ID "${ORCHESTRATOR_MCP_CLIENT_ID:-}"
-upsert_if_nonempty "$ORCH_ENV" ORCHESTRATOR_MCP_CLIENT_SECRET "${ORCHESTRATOR_MCP_CLIENT_SECRET:-}"
-upsert "$ORCH_ENV" ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI "${ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI:-$PUBLIC_URL/agent-callback}"
-upsert "$ORCH_ENV" POST_LOGOUT_REDIRECT_URI "${POST_LOGOUT_REDIRECT_URI:-$PUBLIC_URL/}"
-upsert_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_ID "${ORCHESTRATOR_AGENT_ID:-}"
-upsert_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_SECRET "${ORCHESTRATOR_AGENT_SECRET:-}"
-upsert_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID "${ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID:-}"
-upsert_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET "${ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET:-}"
-upsert_if_nonempty "$ORCH_ENV" HR_AGENT_OAUTH_CLIENT_ID "${HR_AGENT_OAUTH_CLIENT_ID:-}"
-upsert_if_nonempty "$ORCH_ENV" IT_AGENT_OAUTH_CLIENT_ID "${IT_AGENT_OAUTH_CLIENT_ID:-}"
-upsert_if_nonempty "$ORCH_ENV" TRUSTED_SPECIALIST_SUBS "${TRUSTED_SPECIALIST_SUBS:-}"
-upsert "$ORCH_ENV" OPENAI_BASE_URL "${OPENAI_BASE_URL:-}"
-upsert "$ORCH_ENV" OPENAI_API_HEADER "${OPENAI_API_HEADER:-api-key}"
-upsert_if_nonempty "$ORCH_ENV" OPENAI_API_KEY "${OPENAI_API_KEY:-}"
-upsert "$ORCH_ENV" OPENAI_MODEL "${OPENAI_MODEL:-gpt-4.1}"
-upsert "$ORCH_ENV" LLM_FALLBACK_MODE "${LLM_FALLBACK_MODE:-keyword}"
-upsert "$ORCH_ENV" ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
-upsert_if_nonempty "$ORCH_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
-upsert_if_nonempty "$ORCH_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
-upsert_if_nonempty "$ORCH_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
+upsert_env "$ORCH_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
+upsert_env "$ORCH_ENV" WSO2_IS_BROWSER_BASE_URL "$HOST_BASE_URL"
+upsert_env "$ORCH_ENV" WSO2_IS_ISSUER "$SERVICE_BASE_URL/oauth2/token"
+upsert_env "$ORCH_ENV" WSO2_IS_JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
+upsert_env "$ORCH_ENV" IDP_INSECURE_TLS "${MASTER_IDP_INSECURE_TLS:-1}"
+upsert_env_if_nonempty "$ORCH_ENV" ORCHESTRATOR_MCP_CLIENT_ID "${ORCHESTRATOR_MCP_CLIENT_ID:-}"
+upsert_env_if_nonempty "$ORCH_ENV" ORCHESTRATOR_MCP_CLIENT_SECRET "${ORCHESTRATOR_MCP_CLIENT_SECRET:-}"
+upsert_env "$ORCH_ENV" ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI "${ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI:-$PUBLIC_URL/agent-callback}"
+upsert_env "$ORCH_ENV" POST_LOGOUT_REDIRECT_URI "${POST_LOGOUT_REDIRECT_URI:-$PUBLIC_URL/}"
+upsert_env_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_ID "${ORCHESTRATOR_AGENT_ID:-}"
+upsert_env_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_SECRET "${ORCHESTRATOR_AGENT_SECRET:-}"
+upsert_env_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID "${ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID:-}"
+upsert_env_if_nonempty "$ORCH_ENV" ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET "${ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET:-}"
+upsert_env_if_nonempty "$ORCH_ENV" HR_AGENT_OAUTH_CLIENT_ID "${HR_AGENT_OAUTH_CLIENT_ID:-}"
+upsert_env_if_nonempty "$ORCH_ENV" IT_AGENT_OAUTH_CLIENT_ID "${IT_AGENT_OAUTH_CLIENT_ID:-}"
+upsert_env_if_nonempty "$ORCH_ENV" TRUSTED_SPECIALIST_SUBS "${TRUSTED_SPECIALIST_SUBS:-}"
+upsert_env "$ORCH_ENV" OPENAI_BASE_URL "${OPENAI_BASE_URL:-}"
+upsert_env "$ORCH_ENV" OPENAI_API_HEADER "${OPENAI_API_HEADER:-api-key}"
+upsert_env_if_nonempty "$ORCH_ENV" OPENAI_API_KEY "${OPENAI_API_KEY:-}"
+upsert_env "$ORCH_ENV" OPENAI_MODEL "${OPENAI_MODEL:-gpt-4.1}"
+upsert_env "$ORCH_ENV" LLM_FALLBACK_MODE "${LLM_FALLBACK_MODE:-keyword}"
+upsert_env "$ORCH_ENV" ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
+upsert_env_if_nonempty "$ORCH_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
+upsert_env_if_nonempty "$ORCH_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
+upsert_env_if_nonempty "$ORCH_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
 
 # hr agent
-upsert "$HR_AGENT_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
-upsert "$HR_AGENT_ENV" WSO2_IS_ISSUER "$SERVICE_BASE_URL/oauth2/token"
-upsert "$HR_AGENT_ENV" WSO2_IS_JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
-upsert "$HR_AGENT_ENV" IDP_INSECURE_TLS "${MASTER_IDP_INSECURE_TLS:-1}"
-upsert_if_nonempty "$HR_AGENT_ENV" HR_AGENT_ID "${HR_AGENT_ID:-}"
-upsert_if_nonempty "$HR_AGENT_ENV" HR_AGENT_SECRET "${HR_AGENT_SECRET:-}"
-upsert_if_nonempty "$HR_AGENT_ENV" HR_AGENT_OAUTH_CLIENT_ID "${HR_AGENT_OAUTH_CLIENT_ID:-}"
-upsert_if_nonempty "$HR_AGENT_ENV" HR_AGENT_OAUTH_CLIENT_SECRET "${HR_AGENT_OAUTH_CLIENT_SECRET:-}"
-upsert "$HR_AGENT_ENV" HR_AGENT_REDIRECT_URI "${HR_AGENT_REDIRECT_URI:-http://localhost:9999/agent-callback}"
-upsert "$HR_AGENT_ENV" HR_EXPECTED_INBOUND_AUD "${HR_EXPECTED_INBOUND_AUD:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
-upsert_if_nonempty "$HR_AGENT_ENV" HR_TRUSTED_PEER_AGENTS "${ORCHESTRATOR_AGENT_ID:-}"
-upsert_if_nonempty "$HR_AGENT_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
-upsert_if_nonempty "$HR_AGENT_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
-upsert_if_nonempty "$HR_AGENT_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
+upsert_env "$HR_AGENT_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
+upsert_env "$HR_AGENT_ENV" WSO2_IS_ISSUER "$SERVICE_BASE_URL/oauth2/token"
+upsert_env "$HR_AGENT_ENV" WSO2_IS_JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
+upsert_env "$HR_AGENT_ENV" IDP_INSECURE_TLS "${MASTER_IDP_INSECURE_TLS:-1}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" HR_AGENT_ID "${HR_AGENT_ID:-}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" HR_AGENT_SECRET "${HR_AGENT_SECRET:-}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" HR_AGENT_OAUTH_CLIENT_ID "${HR_AGENT_OAUTH_CLIENT_ID:-}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" HR_AGENT_OAUTH_CLIENT_SECRET "${HR_AGENT_OAUTH_CLIENT_SECRET:-}"
+upsert_env "$HR_AGENT_ENV" HR_AGENT_REDIRECT_URI "${HR_AGENT_REDIRECT_URI:-http://localhost:9999/agent-callback}"
+upsert_env "$HR_AGENT_ENV" HR_EXPECTED_INBOUND_AUD "${HR_EXPECTED_INBOUND_AUD:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" HR_TRUSTED_PEER_AGENTS "${ORCHESTRATOR_AGENT_ID:-}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
+upsert_env_if_nonempty "$HR_AGENT_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
 
 # it agent
-upsert "$IT_AGENT_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
-upsert "$IT_AGENT_ENV" WSO2_IS_ISSUER "$SERVICE_BASE_URL/oauth2/token"
-upsert "$IT_AGENT_ENV" WSO2_IS_JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
-upsert "$IT_AGENT_ENV" IDP_INSECURE_TLS "${MASTER_IDP_INSECURE_TLS:-1}"
-upsert_if_nonempty "$IT_AGENT_ENV" IT_AGENT_ID "${IT_AGENT_ID:-}"
-upsert_if_nonempty "$IT_AGENT_ENV" IT_AGENT_SECRET "${IT_AGENT_SECRET:-}"
-upsert_if_nonempty "$IT_AGENT_ENV" IT_AGENT_OAUTH_CLIENT_ID "${IT_AGENT_OAUTH_CLIENT_ID:-}"
-upsert_if_nonempty "$IT_AGENT_ENV" IT_AGENT_OAUTH_CLIENT_SECRET "${IT_AGENT_OAUTH_CLIENT_SECRET:-}"
-upsert "$IT_AGENT_ENV" IT_AGENT_REDIRECT_URI "${IT_AGENT_REDIRECT_URI:-http://localhost:9999/agent-callback}"
-upsert "$IT_AGENT_ENV" IT_EXPECTED_INBOUND_AUD "${IT_EXPECTED_INBOUND_AUD:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
-upsert_if_nonempty "$IT_AGENT_ENV" IT_TRUSTED_PEER_AGENTS "${ORCHESTRATOR_AGENT_ID:-}"
-upsert_if_nonempty "$IT_AGENT_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
-upsert_if_nonempty "$IT_AGENT_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
-upsert_if_nonempty "$IT_AGENT_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
+upsert_env "$IT_AGENT_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
+upsert_env "$IT_AGENT_ENV" WSO2_IS_ISSUER "$SERVICE_BASE_URL/oauth2/token"
+upsert_env "$IT_AGENT_ENV" WSO2_IS_JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
+upsert_env "$IT_AGENT_ENV" IDP_INSECURE_TLS "${MASTER_IDP_INSECURE_TLS:-1}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" IT_AGENT_ID "${IT_AGENT_ID:-}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" IT_AGENT_SECRET "${IT_AGENT_SECRET:-}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" IT_AGENT_OAUTH_CLIENT_ID "${IT_AGENT_OAUTH_CLIENT_ID:-}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" IT_AGENT_OAUTH_CLIENT_SECRET "${IT_AGENT_OAUTH_CLIENT_SECRET:-}"
+upsert_env "$IT_AGENT_ENV" IT_AGENT_REDIRECT_URI "${IT_AGENT_REDIRECT_URI:-http://localhost:9999/agent-callback}"
+upsert_env "$IT_AGENT_ENV" IT_EXPECTED_INBOUND_AUD "${IT_EXPECTED_INBOUND_AUD:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" IT_TRUSTED_PEER_AGENTS "${ORCHESTRATOR_AGENT_ID:-}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
+upsert_env_if_nonempty "$IT_AGENT_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
 
 # hr server
-upsert "$HR_SERVER_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
-upsert "$HR_SERVER_ENV" AUTH_ISSUER "$SERVICE_BASE_URL/oauth2/token"
-upsert "$HR_SERVER_ENV" JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
-upsert "$HR_SERVER_ENV" WSO2_IS_INTROSPECT_URL "$SERVICE_BASE_URL/oauth2/introspect"
-upsert_if_nonempty "$HR_SERVER_ENV" HR_SERVER_EXPECTED_AUD "${HR_SERVER_EXPECTED_AUD:-${HR_AGENT_OAUTH_CLIENT_ID:-}}"
+upsert_env "$HR_SERVER_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
+upsert_env "$HR_SERVER_ENV" AUTH_ISSUER "$SERVICE_BASE_URL/oauth2/token"
+upsert_env "$HR_SERVER_ENV" JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
+upsert_env "$HR_SERVER_ENV" WSO2_IS_INTROSPECT_URL "$SERVICE_BASE_URL/oauth2/introspect"
+upsert_env_if_nonempty "$HR_SERVER_ENV" HR_SERVER_EXPECTED_AUD "${HR_SERVER_EXPECTED_AUD:-${HR_AGENT_OAUTH_CLIENT_ID:-}}"
 # REST reports use the user's token-A (aud=orchestrator-mcp-client). Derive the
 # valid REST audience from the MCP client id so it tracks bootstrap regeneration.
-upsert_if_nonempty "$HR_SERVER_ENV" HR_SERVER_REST_VALID_AUDIENCES "${HR_SERVER_REST_VALID_AUDIENCES:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
-upsert_if_nonempty "$HR_SERVER_ENV" HR_SERVER_TRUSTED_PEER_AGENTS "${HR_AGENT_ID:-}"
-upsert "$HR_SERVER_ENV" ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
-upsert_if_nonempty "$HR_SERVER_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
+upsert_env_if_nonempty "$HR_SERVER_ENV" HR_SERVER_REST_VALID_AUDIENCES "${HR_SERVER_REST_VALID_AUDIENCES:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
+upsert_env_if_nonempty "$HR_SERVER_ENV" HR_SERVER_TRUSTED_PEER_AGENTS "${HR_AGENT_ID:-}"
+upsert_env "$HR_SERVER_ENV" ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
+upsert_env_if_nonempty "$HR_SERVER_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
 
 # it server
-upsert "$IT_SERVER_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
-upsert "$IT_SERVER_ENV" AUTH_ISSUER "$SERVICE_BASE_URL/oauth2/token"
-upsert "$IT_SERVER_ENV" JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
-upsert "$IT_SERVER_ENV" WSO2_IS_INTROSPECT_URL "$SERVICE_BASE_URL/oauth2/introspect"
-upsert_if_nonempty "$IT_SERVER_ENV" IT_SERVER_EXPECTED_AUD "${IT_SERVER_EXPECTED_AUD:-${IT_AGENT_OAUTH_CLIENT_ID:-}}"
-upsert_if_nonempty "$IT_SERVER_ENV" IT_SERVER_REST_VALID_AUDIENCES "${IT_SERVER_REST_VALID_AUDIENCES:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
-upsert_if_nonempty "$IT_SERVER_ENV" IT_SERVER_TRUSTED_PEER_AGENTS "${IT_AGENT_ID:-}"
-upsert "$IT_SERVER_ENV" ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
-upsert_if_nonempty "$IT_SERVER_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
-upsert_if_nonempty "$IT_SERVER_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
-upsert_if_nonempty "$IT_SERVER_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
+upsert_env "$IT_SERVER_ENV" WSO2_IS_BASE_URL "$SERVICE_BASE_URL"
+upsert_env "$IT_SERVER_ENV" AUTH_ISSUER "$SERVICE_BASE_URL/oauth2/token"
+upsert_env "$IT_SERVER_ENV" JWKS_URL "$SERVICE_BASE_URL/oauth2/jwks"
+upsert_env "$IT_SERVER_ENV" WSO2_IS_INTROSPECT_URL "$SERVICE_BASE_URL/oauth2/introspect"
+upsert_env_if_nonempty "$IT_SERVER_ENV" IT_SERVER_EXPECTED_AUD "${IT_SERVER_EXPECTED_AUD:-${IT_AGENT_OAUTH_CLIENT_ID:-}}"
+upsert_env_if_nonempty "$IT_SERVER_ENV" IT_SERVER_REST_VALID_AUDIENCES "${IT_SERVER_REST_VALID_AUDIENCES:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
+upsert_env_if_nonempty "$IT_SERVER_ENV" IT_SERVER_TRUSTED_PEER_AGENTS "${IT_AGENT_ID:-}"
+upsert_env "$IT_SERVER_ENV" ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
+upsert_env_if_nonempty "$IT_SERVER_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
+upsert_env_if_nonempty "$IT_SERVER_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"
+upsert_env_if_nonempty "$IT_SERVER_ENV" INTERNAL_REVOKE_SHARED_SECRET "${INTERNAL_REVOKE_SHARED_SECRET:-}"
 
 # NOTE: the standalone client SPA (legacy :3001) was removed — the browser SPA
 # is served by the orchestrator and authenticates via orchestrator-mcp-client,

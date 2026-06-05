@@ -4,7 +4,7 @@
 
 | Component | Tech | Responsibility |
 |---|---|---|
-| **WSO2 IS 7.3+** | Java/OSGi | OAuth2/OIDC provider, CIBA grant, federation (UAEPass), roles→scopes, branding. Version set via `ARG WSO2IS_VERSION` in `wso2-is-pack/Dockerfile` (the `wso2is-<version>.zip` is downloaded into `wso2-is-pack/`). |
+| **WSO2 IS 7.3+** | Java/OSGi | OAuth2/OIDC provider, CIBA grant, federation (UAEPass), roles→scopes, branding. Version set via `ARG WSO2IS_VERSION` in `wso2-is/Dockerfile` (the `wso2is-<version>.zip` is downloaded into `wso2-is/pack/`). |
 | **orchestrator** | FastAPI | Serves the SPA; BFF login (Pattern C); chat router + composer; A2A client; SSE to the browser; reports proxy; **agents panel** (fleet status + token termination) and **trace** (under-the-hood HTTP capture). Confidential OAuth client `orchestrator-mcp-client`. |
 | **hr_agent / it_agent** | FastAPI | Specialist agents. Receive A2A calls, run **CIBA** to obtain on-behalf-of tokens, call their resource server via **MCP**. Each is its own OAuth client (`hr-agent-oauth` / `it-agent-oauth`) + WSO2 "Agent" identity. |
 | **hr_server / it_server** | FastAPI | Resource servers. Expose **MCP tools** (`/mcp/tools/*`) and **REST** (`/api/me/*`, `/api/reports/*`). Enforce the F-04 six-step token validation. In-memory data stores. |
@@ -109,9 +109,14 @@ issued token and when the revoke route adds a jti — not only on session create
 
 ## Build & image optimization
 
-- **wso2is** uses build context `./wso2-is-pack` (not the repo root), so the ~400 MB
+- **wso2is** uses build context `./wso2-is` (not the repo root), so the ~400 MB
   IS zip stays out of the five Python services' build context. With `.dockerignore`
-  excluding `wso2-is-pack/`, `tempz/`, `docs/`, etc., the Python build context is ~2.6 MB.
+  excluding `wso2-is/`, `tempz/`, `docs/`, etc., the Python build context is ~2.6 MB.
+  Within that context the inputs are grouped: `pack/` (the gitignored zip), `uaepass/`
+  (connector JAR/JSP/logo) and `entrypoint/`.
+- The IS **Dockerfile is multi-stage**: an `extractor` stage unzips the pack, and the
+  runtime stage pulls in only the extracted tree via `COPY --from`, so the ~400 MB zip
+  never lands in a shipped layer; build-only `unzip` stays in the extractor.
 - Python Dockerfiles copy `requirements.txt` and `pip install` **before** copying
   `libs/common` and app code, so editing code never busts the dependency layer
   (code-change rebuilds ~2 s).

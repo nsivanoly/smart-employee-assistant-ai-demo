@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
+#
+# generate-master-env.sh — (re)build config/master.env from live WSO2 IS state.
+#
+#   ./scripts/generate-master-env.sh [output-file]   # default config/master.env
+#
+# Starts from config/master.env.template, carries operator-supplied values
+# (LLM/AMP keys, URLs) over from any previous master.env, then — when IS is
+# reachable and jq is present — looks up the current client IDs/secrets and
+# agent IDs by app/display name and writes them in. Keeping each ID and its
+# secret in lock-step avoids first-run drift when duplicate app names exist.
+# A timestamped backup of the prior file is kept until the run succeeds.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# shellcheck source=lib/common.sh
+source "$ROOT_DIR/scripts/lib/common.sh"
+
 TEMPLATE_FILE="$ROOT_DIR/config/master.env.template"
 OUTPUT_FILE="${1:-$ROOT_DIR/config/master.env}"
 
@@ -26,51 +41,23 @@ fi
 
 cp "$TEMPLATE_FILE" "$OUTPUT_FILE"
 
+# Drop the prior-file backup once the run completes successfully.
 cleanup() {
   [[ -n "$OLD_FILE" && -f "$OLD_FILE" ]] && rm -f "$OLD_FILE"
 }
 trap cleanup EXIT
 
-read_env() {
-  local key="$1"
-  local file="$2"
-  [[ -f "$file" ]] || return 1
-  local value
-  value="$(grep -E "^${key}=" "$file" | tail -n1 | cut -d'=' -f2- || true)"
-  value="${value%\r}"
-  value="${value#\"}"
-  value="${value%\"}"
-  value="${value#\'}"
-  value="${value%\'}"
-  if [[ "$value" == '<'*'>' ]]; then
-    return 1
-  fi
-  [[ -n "$value" ]] || return 1
-  echo "$value"
-}
-
-upsert() {
-  local file="$1"
-  local key="$2"
-  local value="$3"
-  if grep -qE "^${key}=" "$file"; then
-    sed -i.bak "s|^${key}=.*|${key}=${value}|" "$file" && rm -f "$file.bak"
-  else
-    echo "${key}=${value}" >> "$file"
-  fi
-}
-
+# Write KEY=VALUE into the output master.env, but only when VALUE is non-empty.
 set_if_present() {
-  local key="$1"
-  local value="$2"
-  [[ -n "$value" ]] || return 0
-  upsert "$OUTPUT_FILE" "$key" "$value"
+  upsert_env_if_nonempty "$OUTPUT_FILE" "$1" "$2"
 }
 
+# True when the IS admin endpoints are up (JWKS responds).
 wso2_reachable() {
   curl -skf "${IS_BASE_URL}/oauth2/jwks" >/dev/null 2>&1
 }
 
+# Resolve an OAuth app's clientId from its display name (Application Mgmt API).
 wso2_app_client_id_by_name() {
   local app_name="$1"
   local app_id
@@ -81,6 +68,7 @@ wso2_app_client_id_by_name() {
     | jq -r '.clientId // empty'
 }
 
+# Fetch an app's client_secret by clientId via the DCR register endpoint.
 wso2_dcr_client_secret_by_client_id() {
   local client_id="$1"
   [[ -n "$client_id" ]] || return 1
@@ -89,6 +77,7 @@ wso2_dcr_client_secret_by_client_id() {
     | jq -r '.client_secret // empty'
 }
 
+# Resolve a WSO2 "Agent" identity's id from its SCIM DisplayName.
 wso2_agent_id_by_display_name() {
   local display_name="$1"
   curl -sk -u "${IS_ADMIN_USER}:${IS_ADMIN_PASS}" -H "Accept: application/scim+json" \
@@ -98,13 +87,14 @@ wso2_agent_id_by_display_name() {
     | head -n1
 }
 
+# Copy a key's value from the previous master.env into the new one, if present.
 carry_old_value() {
   local key="$1"
   [[ -n "$OLD_FILE" && -f "$OLD_FILE" ]] || return 0
   local value
   value="$(read_env "$key" "$OLD_FILE" || true)"
   [[ -n "$value" ]] || return 0
-  upsert "$OUTPUT_FILE" "$key" "$value"
+  upsert_env "$OUTPUT_FILE" "$key" "$value"
 }
 
 # Carry operator-supplied values from previous master env.
@@ -179,7 +169,7 @@ set_if_present IT_AGENT_REDIRECT_URI "$IT_AGENT_REDIRECT"
 
 
 if [[ -n "$HR_AGENT_ID" || -n "$IT_AGENT_ID" ]]; then
-  upsert "$OUTPUT_FILE" TRUSTED_SPECIALIST_SUBS "${HR_AGENT_ID},${IT_AGENT_ID}"
+  upsert_env "$OUTPUT_FILE" TRUSTED_SPECIALIST_SUBS "${HR_AGENT_ID},${IT_AGENT_ID}"
 fi
 set_if_present HR_EXPECTED_INBOUND_AUD "$ORCH_CLIENT_ID"
 set_if_present IT_EXPECTED_INBOUND_AUD "$ORCH_CLIENT_ID"

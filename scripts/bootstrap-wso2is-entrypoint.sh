@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+#
+# bootstrap-wso2is-entrypoint.sh — idempotent provisioning of WSO2 IS for the
+# srt-emp demo. Invoked by the IS container entrypoint once the server is up
+# (also runnable by hand: RUN_MANUAL_BOOTSTRAP=1 ./start.sh).
+#
+# It waits for the admin API, then ensures (create-or-update, safe to re-run):
+#   - demo users + roles and their role assignments
+#   - the WSO2 "Agent" identities (orchestrator / hr / it) + duplicate cleanup
+#   - API resources and scopes
+#   - the OAuth apps (orchestrator MCP client, agent OAuth clients) with the
+#     right grant types, redirect/logout URIs, email-as-subject, JWT access
+#     tokens, skip-consent, org-role audience and authorized APIs
+#   - the UAEPass IdP (claims, logo) and its attachment + app branding
+# Generated client IDs/secrets are written back into apps/*/.env when those
+# files are writable (a read-only mount is tolerated with a warning).
+#
+# Config via env: IS_BASE_URL, IS_ADMIN_USER/PASS, IS_AGENT_OWNER,
+# BOOTSTRAP_WAIT_SECONDS. All IS calls go through the single http() helper.
 set -euo pipefail
 
 IS_BASE_URL="${IS_BASE_URL:-https://localhost:9443}"
@@ -22,6 +40,7 @@ AGENT_SCHEMA="urn:scim:wso2:agent:schema"
 log() { echo "[bootstrap] $*" >&2; }
 warn() { echo "[bootstrap][warn] $*" >&2; }
 
+# True if the env file (or its dir, when the file is absent) is writable.
 can_write_env_file() {
   local env_file="$1"
   local env_dir
@@ -33,6 +52,8 @@ can_write_env_file() {
   [[ -d "$env_dir" && -w "$env_dir" ]]
 }
 
+# Create a service .env from its .env.example (or empty) if missing; tolerate a
+# read-only mount with a warning.
 ensure_env_file() {
   local env_file="$1"
   local env_example="$2"
@@ -52,6 +73,8 @@ ensure_env_file() {
   fi
 }
 
+# Set or append KEY=VALUE in a service .env, skipping (with a warning) when the
+# mount is read-only. Container-local variant: keeps secrets out of stdout.
 upsert_env_value() {
   local env_file="$1"
   local key="$2"
@@ -67,19 +90,25 @@ upsert_env_value() {
   fi
 }
 
+# Random 32-char alphanumeric client id.
 generate_client_id() {
   openssl rand -base64 30 | tr -dc 'A-Za-z0-9' | head -c 32
 }
 
+# Random base64 client secret.
 generate_client_secret() {
   openssl rand -base64 48 | tr -d '\n'
 }
 
+# True when a value is still an unrendered <PLACEHOLDER>.
 is_placeholder() {
   local value="$1"
   [[ "$value" == '<'*'>' ]]
 }
 
+# The single IS admin-API chokepoint. http <METHOD> <PATH> [DATA] [ACCEPT] [CTYPE].
+# Sends basic-auth admin creds, captures the response into HTTP_BODY and the
+# status into HTTP_CODE (callers branch on HTTP_CODE).
 http() {
   local method="$1"
   local path="$2"
@@ -89,24 +118,21 @@ http() {
   local url="${IS_BASE_URL}${path}"
   local response
 
+  local args=(-sk -u "${IS_ADMIN_USER}:${IS_ADMIN_PASS}"
+    -H "Accept: ${accept}"
+    -X "$method" "$url"
+    -w $'\n%{http_code}')
   if [[ -n "$data" ]]; then
-    response="$(curl -sk -u "${IS_ADMIN_USER}:${IS_ADMIN_PASS}" \
-      -H "Accept: ${accept}" \
-      -H "Content-Type: ${ctype}" \
-      -X "$method" "$url" \
-      -d "$data" \
-      -w $'\n%{http_code}')"
-  else
-    response="$(curl -sk -u "${IS_ADMIN_USER}:${IS_ADMIN_PASS}" \
-      -H "Accept: ${accept}" \
-      -X "$method" "$url" \
-      -w $'\n%{http_code}')"
+    args+=(-H "Content-Type: ${ctype}" -d "$data")
   fi
+  response="$(curl "${args[@]}")"
 
   HTTP_CODE="${response##*$'\n'}"
   HTTP_BODY="${response%$'\n'*}"
 }
 
+# Print the first non-empty, non-placeholder value of KEY across the given files
+# (later args are fallbacks); return 1 if none match.
 read_env_value() {
   local key="$1"
   shift
@@ -122,6 +148,7 @@ read_env_value() {
   return 1
 }
 
+# Poll the admin API until it answers 200 or BOOTSTRAP_WAIT_SECONDS elapses.
 wait_for_admin() {
   local max_wait="${BOOTSTRAP_WAIT_SECONDS:-300}"
   local deadline=$((SECONDS + max_wait))
@@ -138,6 +165,7 @@ wait_for_admin() {
   return 1
 }
 
+# Create a demo user (or no-op if it already exists), setting password/claims.
 ensure_user() {
   local username="$1"
   local password="$2"
@@ -191,6 +219,7 @@ ensure_user() {
   echo ""
 }
 
+# Create an organization role with its permissions/scopes if not already present.
 ensure_role() {
   local role_name="$1"
   shift
@@ -280,6 +309,7 @@ ensure_role() {
   echo "$role_id"
 }
 
+# Assign the given roles to a user (idempotent SCIM PATCH).
 ensure_user_roles() {
   local user_id="$1"
   shift
@@ -321,6 +351,7 @@ ensure_user_roles() {
   done
 }
 
+# Create a WSO2 "Agent" identity (orchestrator/hr/it) and return its id.
 ensure_agent() {
   local display_name="$1"
   local owner="$2"
@@ -389,6 +420,7 @@ ensure_agent() {
   echo "$agent_id"
 }
 
+# Remove extra Agent identities sharing a display name, keeping a single canonical one.
 reconcile_agent_duplicates() {
   local display_name="$1"
 
@@ -419,6 +451,7 @@ reconcile_agent_duplicates() {
   done
 }
 
+# Create an API resource and its scopes (identified by identifier/URI) if absent.
 ensure_api_resource() {
   local name="$1"
   local identifier="$2"
@@ -497,6 +530,7 @@ ensure_api_resource() {
   echo "$api_id"
 }
 
+# Echo the application id whose inbound OAuth clientId matches, or nothing.
 find_app_by_client_id() {
   local client_id="$1"
   http GET "/api/server/v1/applications?filter=clientId+eq+${client_id}"
@@ -507,6 +541,7 @@ find_app_by_client_id() {
   jq -r --arg cid "$client_id" '.applications[]? | select(.clientId==$cid) | .id' <<<"$HTTP_BODY" | head -n 1
 }
 
+# Echo the application id whose display name matches, or nothing.
 find_app_by_name() {
   local app_name="$1"
   http GET "/api/server/v1/applications?limit=200"
@@ -517,6 +552,7 @@ find_app_by_name() {
   jq -r --arg n "$app_name" '.applications[]? | select(.name==$n) | .id' <<<"$HTTP_BODY" | head -n 1
 }
 
+# Fetch an app's client_secret by clientId via the DCR register endpoint.
 dcr_client_secret_by_client_id() {
   local client_id="$1"
   [[ -n "$client_id" ]] || { echo ""; return 0; }
@@ -528,6 +564,7 @@ dcr_client_secret_by_client_id() {
   jq -r '.client_secret // empty' <<<"$HTTP_BODY"
 }
 
+# Disable the login consent prompt for an app (skipConsent=true).
 ensure_skip_login_consent() {
   # Skip the OAuth login-consent prompt so IS auto-grants all role-permitted
   # scopes. Required for federated (UAEPass) users: the programmatic Pattern-C
@@ -545,6 +582,7 @@ ensure_skip_login_consent() {
   fi
 }
 
+# Enable app-native (API-based) authentication for the app.
 ensure_app_native_auth_enabled() {
   local app_id="$1"
   local app_name="$2"
@@ -573,6 +611,7 @@ ensure_app_native_auth_enabled() {
   fi
 }
 
+# Make the app assert email as the OIDC subject (stable sub across tokens).
 ensure_email_subject() {
   # Set the OIDC subject identifier to emailaddress so that token-A.sub == email
   # for users with an emailaddress attribute. Without this, sub is the user-id UUID
@@ -610,6 +649,7 @@ ensure_email_subject() {
   fi
 }
 
+# Set allowedAudience=ORGANIZATION so org roles map into token scopes.
 ensure_org_role_audience() {
   # Set associatedRoles.allowedAudience=ORGANIZATION so that organization-level
   # roles (HR Admin, employee) are used for CIBA scope resolution. Without this,
@@ -642,6 +682,7 @@ ensure_org_role_audience() {
   fi
 }
 
+# Apply the OIDC inbound settings an agent OAuth client needs (grants, etc.).
 ensure_agent_oidc_settings() {
   local app_id="$1"
   local app_name="$2"
@@ -676,6 +717,7 @@ ensure_agent_oidc_settings() {
   fi
 }
 
+# Switch the app's access-token type to self-contained JWT.
 ensure_oidc_access_token_jwt() {
   local app_id="$1"
   local app_name="$2"
@@ -713,6 +755,7 @@ ensure_oidc_access_token_jwt() {
 # (.../agent-callback) and the post-logout redirect (the SPA root, e.g.
 # http://localhost:8090/) differ, so a single literal callbackURL cannot match
 # both. Set a regex callbackURL alternating the two so login AND logout pass.
+# Register the RP-initiated-logout callback URL (regex) on the app.
 ensure_logout_callback_regex() {
   local app_id="$1"
   local app_name="$2"
@@ -744,6 +787,7 @@ ensure_logout_callback_regex() {
   fi
 }
 
+# Provision the confidential orchestrator-mcp-client app end to end (the BFF login client).
 ensure_orchestrator_app() {
   local client_id="$1"
   local client_secret="$2"
@@ -779,6 +823,7 @@ ensure_orchestrator_app() {
   fi
 }
 
+# Provision an agent OAuth client app (hr/it/orchestrator-agent) with CIBA + JWT settings.
 ensure_service_provider_app() {
   local app_name="$1"
   local client_id="$2"
@@ -916,6 +961,7 @@ ensure_service_provider_app() {
   fi
 }
 
+# Provision a public (no-secret) SPA-style OAuth client app.
 ensure_public_service_provider_app() {
   local app_name="$1"
   local client_id="$2"
@@ -986,6 +1032,7 @@ ensure_public_service_provider_app() {
   fi
 }
 
+# Authorize an app to call an API resource with the given scopes (UC-06 grants).
 ensure_authorized_api() {
   local app_id="$1"
   local api_id="$2"
@@ -1062,6 +1109,7 @@ ensure_authorized_api() {
 # + public sandbox credentials (sandbox_stage). JIT provisioning is enabled so
 # UAEPass logins map to local accounts (pre-created for sivanoly@/ramith@) whose
 # roles drive scopes. Idempotent: skips if an IdP named "UAEPass" exists.
+# Create/update the UAEPass federated IdP (OIDC endpoints, secrets).
 ensure_uaepass_idp() {
   local idp_name="UAEPass"
   # Registered authenticator: name "UAEPassAuthenticator", id = base64url(name)
@@ -1136,6 +1184,7 @@ ensure_uaepass_idp() {
 # Attach UAEPass as a federated login option on an application (alongside the
 # local Basic authenticator) so the client SPA shows a "Sign in with UAEPass"
 # button. ``app_id`` is the IS application UUID.
+# Add UAEPass to an app's login step with useMappedLocalSubject set.
 attach_uaepass_to_app() {
   local app_id="$1"
   [[ -n "$app_id" && -n "${UAEPASS_IDP_ID:-}" ]] || { warn "attach_uaepass: missing app_id/idp_id"; return 0; }
@@ -1168,6 +1217,7 @@ attach_uaepass_to_app() {
 # only that app's sign-in reflects UAEPass — the WSO2 Console and other apps
 # keep the default IS branding. ``app_id`` is the IS application UUID.
 # Idempotent: POST if absent, PUT if already configured.
+# Apply the demo login-page branding (logo, colors, text) to an app.
 set_app_branding() {
   local app_id="$1"
   [[ -n "$app_id" ]] || { warn "set_app_branding: missing app_id"; return 0; }
@@ -1214,6 +1264,7 @@ set_app_branding() {
 # CIBA consent (authenticated user) won't match the agent's login_hint (the
 # user's email) -> 401 "authenticated user is not the same as resolved user".
 # Using email as the user-id makes JIT resolve to the pre-created local account.
+# Configure the UAEPass IdP claim mapping (email → local user id).
 set_uaepass_claims() {
   [[ -n "${UAEPASS_IDP_ID:-}" ]] || return 0
   local email_id
@@ -1236,6 +1287,7 @@ set_uaepass_claims() {
 
 # Ensure the IdP logo (already deployed to the Console logo dir by the image)
 # is referenced on the IdP record.
+# Set the UAEPass IdP logo/image used on the login page.
 set_uaepass_logo() {
   [[ -n "${UAEPASS_IDP_ID:-}" ]] || return 0
   local body
@@ -1248,6 +1300,7 @@ set_uaepass_logo() {
   fi
 }
 
+# Orchestrate the full provisioning sequence (waits for the admin API first).
 main() {
   wait_for_admin || return 0
 

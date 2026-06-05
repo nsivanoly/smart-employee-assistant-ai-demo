@@ -8,7 +8,7 @@ scopes, and per-action CIBA consent works for them.
 
 All of this is reproduced on a clean start by `scripts/bootstrap-wso2is-entrypoint.sh`:
 
-1. **Connector deployment** (`wso2-is-pack/Dockerfile`) — the UAEPass OIDC authenticator
+1. **Connector deployment** (`wso2-is/Dockerfile`) — the UAEPass OIDC authenticator
    JAR into `repository/components/dropins/`, the branded error JSP, and the logo.
 2. **UAEPass IdP** (`ensure_uaepass_idp`) — staging mode (`IsStagingEnv=true`, so the
    connector uses `stg-id.uaepass.ae` endpoints), public sandbox creds (`sandbox_stage`),
@@ -35,14 +35,14 @@ Nimbus 9**. IS 7.3 ships **Nimbus 10.3.0**, so the stock JAR either fails OSGi
 resolution (manifest caps `com.nimbusds.* < 8.0.0`) or, if forced, throws
 `NoSuchMethodError` at the userinfo step.
 
-**Fix applied (baked into `wso2-is-pack/`):** the connector's 6 source files were
+**Fix applied (baked into `wso2-is/`):** the connector's 6 source files were
 **recompiled against IS 7.3's own Nimbus 10 jars** (the source is already
 forward-compatible — `parse(...).entrySet()` works on the `Map` Nimbus 10 returns),
 and the manifest import ranges were widened. A side-by-side Nimbus approach does **not**
 work (OSGi uses-constraint conflict with the IS framework that also exposes Nimbus 10).
 
 The recompiled JAR is the 44 KB `org.wso2.carbon.identity.authenticator.uaepass-1.1.6.jar`
-in `wso2-is-pack/` and is committed.
+in `wso2-is/uaepass/` and is committed.
 
 ## Why each setting matters (failure modes)
 
