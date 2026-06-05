@@ -25,7 +25,6 @@ tempz/
 /.vm-tunnel.pid
 data.txt
 .vscode/
-platform/
 
 # ── Large provided artifact (~400 MB; downloaded out-of-band, not committed) ─
 # Any IS version (wso2is-7.3.0.zip, wso2is-7.4.0.zip, …) — never commit the pack.
