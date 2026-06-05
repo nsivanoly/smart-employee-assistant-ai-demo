@@ -38,6 +38,19 @@ if ! [[ "$RID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[
   exit 2
 fi
 
+# Detect the available Compose CLI: prefer v2 ("docker compose"), fall back to
+# the standalone v1 binary ("docker-compose"). Without this, a host that only
+# has one of the two yields zero matches (the other errors into /dev/null) and
+# the script wrongly reports "no log lines found".
+if docker compose version >/dev/null 2>&1; then
+  DC=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  DC=(docker-compose)
+else
+  echo "error: neither 'docker compose' nor 'docker-compose' is available" >&2
+  exit 2
+fi
+
 SERVICES=(orchestrator hr_agent it_agent hr_server it_server)
 
 # Collect log lines from each service that match the rid, prefix them with
@@ -46,8 +59,8 @@ TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
 for svc in "${SERVICES[@]}"; do
-  # docker compose logs --no-color --no-log-prefix prints raw service stdout/stderr.
-  docker compose logs --no-color --no-log-prefix "$svc" 2>/dev/null \
+  # compose logs --no-color --no-log-prefix prints raw service stdout/stderr.
+  "${DC[@]}" logs --no-color --no-log-prefix "$svc" 2>/dev/null \
     | grep -F " ${RID} " \
     | sed "s/^/${svc} | /" \
     >> "$TMP" || true
