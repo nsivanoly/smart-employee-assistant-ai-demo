@@ -5,7 +5,7 @@
 | Component | Tech | Responsibility |
 |---|---|---|
 | **WSO2 IS 7.3+** | Java/OSGi | OAuth2/OIDC provider, CIBA grant, federation (UAEPass), roles→scopes, branding. Version set via `ARG WSO2IS_VERSION` in `wso2-is-pack/Dockerfile` (the `wso2is-<version>.zip` is downloaded into `wso2-is-pack/`). |
-| **orchestrator** | FastAPI | Serves the SPA; BFF login (Pattern C); chat router + composer; A2A client; SSE to the browser; reports proxy. Confidential OAuth client `orchestrator-mcp-client`. |
+| **orchestrator** | FastAPI | Serves the SPA; BFF login (Pattern C); chat router + composer; A2A client; SSE to the browser; reports proxy; **agents panel** (fleet status + token termination) and **trace** (under-the-hood HTTP capture). Confidential OAuth client `orchestrator-mcp-client`. |
 | **hr_agent / it_agent** | FastAPI | Specialist agents. Receive A2A calls, run **CIBA** to obtain on-behalf-of tokens, call their resource server via **MCP**. Each is its own OAuth client (`hr-agent-oauth` / `it-agent-oauth`) + WSO2 "Agent" identity. |
 | **hr_server / it_server** | FastAPI | Resource servers. Expose **MCP tools** (`/mcp/tools/*`) and **REST** (`/api/me/*`, `/api/reports/*`). Enforce the F-04 six-step token validation. In-memory data stores. |
 | **client** | static JS | The SPA (`app.js`/`index.html`/`styles.css`), served by the orchestrator at `/`. No tokens in the browser — only the `orch_sid` session cookie. |
@@ -74,6 +74,38 @@ Federated (UAEPass) users carry the UAEPass UUID as their raw subject; the IdP c
 mapping (`email` → user-id) plus `useMappedLocalSubject=true` on the apps resolves
 them to the matching local account, so their **local roles drive OAuth scopes** and
 the CIBA `login_hint` matches the consent-window user. See [UAEPASS.md](UAEPASS.md).
+
+## Agents panel & audit traces
+
+Two operator-facing surfaces, both served by the orchestrator.
+
+**Agents panel** (`apps/orchestrator/agents/`, `GET /api/agents`,
+`POST /api/agents/{agent_id}/revoke`). Cookie-authenticated; the view is *per user* —
+token rows are derived from that session's `completed_ciba_log`, not a global view.
+Each row carries the agent's authorized scopes (mirrors the bootstrap
+`ensure_authorized_api` grants; the orchestrator row shows only its OIDC sign-in scopes)
+and one row per issued OBO token with a stable `token_id` (its index in the log),
+**masked jti**, status (`active`/`expired`/`revoked`), purpose, and scopes. Raw token
+material is never returned to the browser. **Terminate** walks the matching records and
+fires the revocation cascade: `InternalEventsClient.fan_out` → receiver denylists the
+jti (F-04 step 7) and `on_revoke` evicts the agent's OBO cache; the agent additionally
+revokes the token at IS via RFC 7009 (`/oauth2/revoke`). The jti is added to
+`Session.revoked_jtis`. The orchestrator row is non-revocable (revoking it == sign-out).
+
+**Audit traces / under-the-hood** (`apps/orchestrator/trace/`, `GET /api/trace/{rid}`).
+An `HttpTraceRecorder` is installed as `httpx` **event hooks** on the orchestrator's
+outbound clients (both A2A clients + the reports/health proxy). For every outbound call
+it records method, URL, request/response bodies and headers, status, and duration,
+grouped by `X-Request-ID`. Bounded (≤60 request-ids × 40 calls, bodies capped). Sensitive
+headers (`Authorization`, `X-Internal-Auth`, `Cookie`) are masked before storage. The SPA
+fetches this per request id and renders it under the Trace panel. (This is independent of
+the OTEL `ENABLE_API_TRACES` span export, which targets a collector, not the browser.)
+
+**Session persistence.** Dev-mode persistence (`SESSION_PERSIST_PATH`,
+`auth/session_store.py`) keeps sessions across `uvicorn --reload` restarts. It persists
+token-A **and** `completed_ciba_log` + `revoked_jtis`, so the Agents panel survives a
+reload. The store flushes (`SessionStore.persist()`) when the chat route appends an
+issued token and when the revoke route adds a jti — not only on session create/delete.
 
 ## Build & image optimization
 

@@ -77,6 +77,25 @@ excludes `wso2-is-pack/`. Confirm the Python build context is small
 consuming services. For `requirements.txt`, rebuild:
 `docker compose build <svc> && docker compose up -d <svc>`.
 
+## SPA error `Uncaught SyntaxError: Unexpected end of input` (or broken sign-in logo)
+**Cause:** after an atomic-write edit, the macOS/Colima bind mount served a *truncated*
+copy of a client file (`app.js`/`index.html`) even though the file on disk is complete.
+**Fix:** `docker compose restart orchestrator` re-resolves the mount, then hard-refresh
+the browser (Cmd/Ctrl+Shift+R). Verify with
+`curl -s http://localhost:8090/app.js | wc -l` vs `wc -l apps/client/app.js`.
+
+## Agents panel is empty after a reload/restart
+**Cause (fixed):** dev session persistence used to store only token-A, so the issued-token
+log (`completed_ciba_log`) was dropped on every `uvicorn --reload` restart.
+**Now:** the log and revoked jtis are persisted and flushed on each new token / termination.
+If a token was minted *before* this change it won't backfill — run one new agent action.
+
+## `grep-trace.sh` prints "no log lines found" for a valid request id
+**Cause (fixed):** the script hard-coded `docker compose` (v2); on a host with only the
+v1 `docker-compose` binary every log query errored into `/dev/null`.
+**Now:** the script auto-detects v2/v1. If it still finds nothing, the logs may have rotated
+(`docker compose logs` keeps a bounded buffer) — reproduce the request and re-run.
+
 ## Traces too noisy / missing
 - Too noisy (per-request `/events`, `/healthz` spans): set `ENABLE_API_TRACES=0` in the
   service `.env` (default).

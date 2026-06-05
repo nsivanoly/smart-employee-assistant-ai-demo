@@ -29,6 +29,7 @@ Browser SPA ──(BFF login, Pattern C)──► Orchestrator ──A2A──�
 - [Services & ports](#services--ports)
 - [Demo users](#demo-users)
 - [Try it (test scenarios)](#try-it-test-scenarios)
+- [Agents panel & audit traces](#agents-panel--audit-traces)
 - [Configuration](#configuration)
 - [Development workflow](#development-workflow)
 - [Observability / tracing](#observability--tracing)
@@ -171,9 +172,63 @@ Sign in at `http://localhost:8090` (local Basic or "Sign in with UAEPass"), then
 
 **Sidebar** (all users): My Leaves, My Cubicle, My IT Assets.
 
+**Header tabs** (all users): **Agents →** (fleet status + token control) and **Trace**
+(audit panel). See [Agents panel & audit traces](#agents-panel--audit-traces).
+
 > **Consent caching (UC-06):** after you approve once, the agent caches the token
 > for ~1 hour, so repeat actions are silent. To force the consent UX again, restart
 > the agents: `docker compose restart hr_agent it_agent`.
+
+---
+
+## Agents panel & audit traces
+
+Two in-app surfaces let you watch and control what the agents do on your behalf.
+
+### Agents panel (header → **Agents →**)
+
+A live fleet view for the signed-in user:
+
+- **Orchestrator (BFF)** row — the confidential client. Shows its session token
+  (token-A) status and only its sign-in scopes (`openid profile email`).
+- **HR Agent / IT Agent** rows — `/healthz` liveness, the agent's full authorized
+  scope set (each with a plain-English meaning), and one card per **OBO token**
+  (token-B) this session has minted: masked `jti`, issued/expiry with a live
+  countdown, the action (purpose) that minted it, and its scopes.
+- **Terminate** — revoke one token or all active tokens for an agent. This fires the
+  revocation cascade (below), so the agent's cached OBO token is evicted and the token
+  is revoked at WSO2 IS — the next action re-prompts for consent. Great for demoing
+  UC-10. The orchestrator row is intentionally **not** revocable (that's sign-out).
+
+> Token rows survive a `--reload`/restart — the session's issued-token log is persisted
+> (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#agents-panel--audit-traces)).
+> Tokens minted *before* the first action after an upgrade won't backfill; run one new
+> action to repopulate.
+
+### Audit traces (header → **Trace**)
+
+One row per chat request, keyed by **`X-Request-ID`**:
+
+- **Event timeline** — the SSE steps (routing → consent → reply) with relative timings.
+- **🔍 Under the hood** — the real **outbound HTTP calls** the orchestrator made for that
+  request (orchestrator → agents, proxy/health): method, URL, **request/response bodies
+  and headers**. Secrets are masked (bearer tokens, internal shared secret, cookies) —
+  raw token bytes never reach the browser. Collapsible; served by `GET /api/trace/{rid}`.
+- **⧉ rid** copies the request id; **⧉ grep** copies `./scripts/grep-trace.sh <rid>` so
+  you can replay the full server-side log chain across all five services:
+
+```bash
+./scripts/grep-trace.sh 1a1ef8c5-1d07-47b7-bc7a-ce769d08d227
+# orchestrator | chat_request …
+# hr_agent     | ciba_initiated expires_in=300s …   (consent window)
+# hr_server    | … (downstream REST)
+# hr_agent     | hr_dispatcher_token_cached exp_in_s=3600 …   (OBO token ~1 h)
+# orchestrator | chat_fan_out done
+```
+
+> The two CIBA times mean different things: `expires_in=300s` is the **consent window**
+> (how long you have to approve); the cached OBO token's `exp` (~1 h) is the **token's
+> own life** — the one the Agents panel shows and Terminate revokes.
 
 ---
 
@@ -240,6 +295,12 @@ ENABLE_API_TRACES=1   # on: + FastAPI server spans + httpx client spans + cross-
 Set on `orchestrator`, `hr_agent`, `it_agent`, then
 `docker compose up -d orchestrator hr_agent it_agent`.
 
+**In-app, no collector needed:** the **Trace** panel
+([above](#agents-panel--audit-traces)) shows each request's SSE timeline and the real
+outbound HTTP calls (request/response/headers, secrets masked), and
+`./scripts/grep-trace.sh <rid>` reconstructs the cross-service log chain from
+`docker compose logs` (auto-detects Compose v1/v2).
+
 ---
 
 ## UAEPass federated login
@@ -259,7 +320,8 @@ Full details and the design rationale: **[docs/UAEPASS.md](docs/UAEPASS.md)**.
 ```
 srt-emp/
 ├── apps/
-│   ├── orchestrator/     # BFF login, chat router/composer, A2A client, SSE, reports proxy
+│   ├── orchestrator/     # BFF login, chat router/composer, A2A client, SSE, reports proxy,
+│   │                     #   agents/ (fleet + token control), trace/ (under-the-hood HTTP capture)
 │   ├── hr_agent/         # HR specialist: A2A handler, CIBA orchestrator, MCP client, it-peer client
 │   ├── it_agent/         # IT specialist: A2A handler, CIBA orchestrator, MCP client, peer endpoint
 │   ├── hr_server/        # HR resource server: MCP tools + REST, F-04 JWT validator, in-memory store
@@ -289,6 +351,8 @@ Highlights:
 - **403 `insufficient_scope`** → token-A lacks role scopes; re-login (esp. after a clean start).
 - **Consent window shows a login page** → the agent app needs the federated session; covered in docs.
 - **Build is slow** → ensure `wso2-is-pack/` is excluded from the Python build context (it is, via `.dockerignore`).
+- **SPA shows `Unexpected end of input` / broken logo after an edit** → macOS/Colima bind-mount served a truncated client file; `docker compose restart orchestrator` re-syncs the mount.
+- **Agents panel empty after a reload** → fixed: the issued-token log is now persisted; run one new agent action to repopulate if it was minted before the upgrade.
 
 ---
 
