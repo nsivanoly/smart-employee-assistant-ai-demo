@@ -451,7 +451,34 @@ async def _run_serial_fan_out(
                 continue
 
             if isinstance(first, ResultPayload):
-                # Tool ran synchronously — no consent needed.
+                # Tool ran synchronously — no fresh consent needed (a no-CIBA
+                # read, or an OBO cache-hit / UC-06 reuse). The OBO token still
+                # exists, so surface it in the Agents panel just like the
+                # two-phase path does — otherwise tokens minted on the
+                # synchronous path (common for IT reads / cached tokens) never
+                # appear and can't be terminated.
+                _already_logged = any(
+                    r.jti == getattr(first, "token_jti", "")
+                    for r in session.completed_ciba_log
+                )
+                if getattr(first, "token_jti", "") and not _already_logged:
+                    _skill = next(
+                        (s for s in card.skills if getattr(s, "id", "") == tool_call.tool_id),
+                        None,
+                    )
+                    session.completed_ciba_log.append(
+                        IssuedTokenRecord(
+                            session_id=session.session_id,
+                            agent_id=agent_id,
+                            jti=first.token_jti,
+                            exp=first.token_exp,
+                            iat=first.token_iat,
+                            auth_req_id="",  # no CIBA round-trip on this path
+                            scope=getattr(_skill, "scope", "") if _skill else "",
+                            tool_id=tool_call.tool_id,
+                        )
+                    )
+                    deps.session_store.persist()
                 fragment = _render_result(agent_label, tool_call.tool_id, first)
                 _record(agent_id, tool_call.tool_id, fragment=fragment, ok=True, data=first.data)
                 continue

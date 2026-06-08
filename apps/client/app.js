@@ -180,6 +180,108 @@ function logErr(tag, ...args)  { console.error(new Date().toISOString(), tag, ..
 const TRACES_MAX = 50;
 const traces = [];   // newest-first; each = {rid, message, startedAt, status, agents:Set, events:[]}
 
+// Audit Traces survive a page reload: the timeline is built client-side from
+// SSE events (the server only exposes per-rid HTTP detail, not the list), so we
+// mirror `traces` into sessionStorage and rehydrate on resume. Keyed by session
+// id so a different login never shows a previous user's timeline.
+const _TRACES_STORE_KEY = "orch_traces";
+
+function _persistTraces() {
+  try {
+    const payload = {
+      sid: (typeof sessionId !== "undefined" && sessionId) || "",
+      traces: traces.map((t) => ({
+        rid: t.rid,
+        message: t.message,
+        startedAt: t.startedAt instanceof Date ? t.startedAt.toISOString() : t.startedAt,
+        status: t.status,
+        agents: Array.from(t.agents || []),
+        events: (t.events || []).map((e) => ({
+          at: e.at instanceof Date ? e.at.toISOString() : e.at,
+          type: e.type,
+          summary: e.summary,
+        })),
+      })),
+    };
+    sessionStorage.setItem(_TRACES_STORE_KEY, JSON.stringify(payload));
+  } catch (_) { /* storage full / disabled — non-fatal */ }
+}
+
+function hydrateTraces() {
+  try {
+    const raw = sessionStorage.getItem(_TRACES_STORE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    // Only restore traces that belong to the session we're resuming.
+    if (!payload || (payload.sid && sessionId && payload.sid !== sessionId)) {
+      sessionStorage.removeItem(_TRACES_STORE_KEY);
+      return;
+    }
+    const restored = (payload.traces || []).map((t) => ({
+      rid: t.rid,
+      message: t.message,
+      startedAt: t.startedAt ? new Date(t.startedAt) : new Date(),
+      status: t.status,
+      agents: new Set(t.agents || []),
+      events: (t.events || []).map((e) => ({
+        at: e.at ? new Date(e.at) : new Date(),
+        type: e.type,
+        summary: e.summary,
+      })),
+    }));
+    traces.length = 0;
+    traces.push(...restored);
+    renderTracePanel();
+  } catch (_) { /* corrupt payload — ignore */ }
+}
+
+// Chat transcript survives a page reload. The server keeps a short (12-turn)
+// plain-text history for LLM context only; the visible transcript is mirrored
+// into sessionStorage here and rehydrated on resume. Keyed by session id.
+const _CHAT_STORE_KEY = "orch_chat";
+const CHAT_MAX = 200;
+const chatLog = [];   // [{role:"user"|"assistant"|"error", text}]
+let _chatHydrating = false;
+
+function recordChatMessage(role, text, cssClass) {
+  if (_chatHydrating) return;   // don't re-persist while replaying stored msgs
+  chatLog.push({ role, text, cssClass });
+  while (chatLog.length > CHAT_MAX) chatLog.shift();
+  try {
+    sessionStorage.setItem(_CHAT_STORE_KEY, JSON.stringify({
+      sid: (typeof sessionId !== "undefined" && sessionId) || "",
+      messages: chatLog,
+    }));
+  } catch (_) { /* storage full / disabled — non-fatal */ }
+}
+
+function hydrateChat() {
+  try {
+    const raw = sessionStorage.getItem(_CHAT_STORE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    if (!payload || (payload.sid && sessionId && payload.sid !== sessionId)) {
+      sessionStorage.removeItem(_CHAT_STORE_KEY);
+      return;
+    }
+    const msgs = Array.isArray(payload.messages) ? payload.messages : [];
+    if (!msgs.length) return;
+    _chatHydrating = true;
+    hideEmptyState();
+    for (const m of msgs) {
+      if (m.role === "user") appendUserMessage(m.text);
+      else if (m.role === "error") appendErrorMessage(m.text);
+      else if (m.role === "status") appendStatusLine(m.text, m.cssClass);
+      else appendAssistantMessage(m.text);
+    }
+    _chatHydrating = false;
+    chatLog.length = 0;
+    chatLog.push(...msgs);
+  } catch (_) {
+    _chatHydrating = false;
+  }
+}
+
 function recordTraceStart(rid, message) {
   const trace = {
     rid,
@@ -191,6 +293,7 @@ function recordTraceStart(rid, message) {
   };
   traces.unshift(trace);
   while (traces.length > TRACES_MAX) traces.pop();
+  _persistTraces();
   renderTracePanel();
 }
 
@@ -201,6 +304,7 @@ function recordTraceEvent(rid, type, summary, opts = {}) {
   trace.events.push({ at: new Date(), type, summary });
   if (opts.agentId) trace.agents.add(opts.agentId);
   if (opts.status) trace.status = opts.status;
+  _persistTraces();
   renderTracePanel();
 }
 
@@ -457,6 +561,8 @@ async function init() {
       userGroups = [];
     }
     showAppShell();
+    hydrateChat();     // restore the chat transcript across reloads
+    hydrateTraces();   // restore the Audit Traces timeline across reloads
     connectSse(sessionId);
   } else {
     showSigninPage();
@@ -487,10 +593,15 @@ function wireStaticUI() {
       ? COPY.signoutPrimaryCiba
       : COPY.signoutPrimary;
     $("signout-dialog").hidden = false;
+    populateSignoutTokenDetails();   // show active OBO tokens + live expiry
   });
 
-  $("signout-confirm-btn").addEventListener("click", performSignOut);
+  $("signout-confirm-btn").addEventListener("click", () => {
+    _stopSignoutCountdown();
+    performSignOut();
+  });
   $("signout-cancel-btn").addEventListener("click", () => {
+    _stopSignoutCountdown();
     $("signout-dialog").hidden = true;
   });
 
@@ -619,6 +730,10 @@ async function performSignOut() {
   localStorage.removeItem("orch_session_id");
   localStorage.removeItem("orch_user_name");
   localStorage.removeItem("orch_groups");
+  try { sessionStorage.removeItem(_TRACES_STORE_KEY); } catch (_) {}
+  try { sessionStorage.removeItem(_CHAT_STORE_KEY); } catch (_) {}
+  traces.length = 0;
+  chatLog.length = 0;
   sessionId = null;
 
   // 3A.1 FIX-9: server requires X-Request-ID. SPA mints a fresh rid.
@@ -841,6 +956,15 @@ function _fmtCountdown(secs) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+// Compact, round duration for the "default token validity" label (e.g. 120 → "2 min").
+function _fmtDuration(secs) {
+  if (!secs || secs <= 0) return "—";
+  if (secs % 3600 === 0) { const h = secs / 3600; return `${h} hour${h === 1 ? "" : "s"}`; }
+  if (secs % 60 === 0) { const m = secs / 60; return `${m} min`; }
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return m > 0 ? `${m} min ${s} s` : `${s} s`;
+}
+
 function _tokenStatusPill(status) {
   const map = { active: "is-active", expired: "is-expired", revoked: "is-revoked" };
   return `<span class="token-pill ${map[status] || ""}">${status}</span>`;
@@ -962,6 +1086,12 @@ function renderAgents(agents) {
           return `<code class="scope-chip" title="${escapeHtml(meaning)}">${escapeHtml(name)}</code>`;
         }).join("")}</span></div>`;
     }
+    // Default OBO token validity for specialist agents (from the agent card).
+    if (a.kind !== "orchestrator" && a.token_validity_seconds) {
+      metaHtml +=
+        `<div class="agent-meta-row"><span class="agent-meta-k">Token validity</span>` +
+        `<span class="agent-meta-v">${escapeHtml(_fmtDuration(a.token_validity_seconds))} <span class="agent-meta-hint">(default)</span></span></div>`;
+    }
     meta.innerHTML = metaHtml;
     card.appendChild(meta);
 
@@ -1032,7 +1162,9 @@ function renderAgents(agents) {
             `Issued ${_fmtEpoch(t.issued_at)}` +
             (t.status === "active"
               ? ` · expires in ${_countdownSpan(t.expires_at, t.status)}`
-              : ` · ${t.status}`) +
+              : t.status === "expired"
+                ? ` · expired ${_fmtEpoch(t.expires_at)}`
+                : ` · ${t.status} (expiry ${_fmtEpoch(t.expires_at)})`) +
           `</div>` +
         `</div>`;
       }).join("");
@@ -1080,6 +1212,70 @@ function _startAgentsCountdown() {
   };
   tick();
   _agentsCountdownTimer = setInterval(tick, 1000);
+}
+
+// ─── Sign-out dialog: active OBO token summary + live expiry countdown ────────
+let _signoutCountdownTimer = null;
+
+function _stopSignoutCountdown() {
+  if (_signoutCountdownTimer) { clearInterval(_signoutCountdownTimer); _signoutCountdownTimer = null; }
+}
+
+function _startSignoutCountdown() {
+  _stopSignoutCountdown();
+  const tick = () => {
+    const dlg = $("signout-dialog");
+    if (!dlg || dlg.hidden) { _stopSignoutCountdown(); return; }
+    const now = Math.floor(Date.now() / 1000);
+    document.querySelectorAll("#signout-token-details .js-countdown").forEach((el) => {
+      const exp = parseInt(el.getAttribute("data-exp") || "0", 10);
+      el.textContent = _fmtCountdown(Math.max(0, exp - now));
+    });
+  };
+  tick();
+  _signoutCountdownTimer = setInterval(tick, 1000);
+}
+
+// Fetch the per-session fleet and list the active OBO tokens that will be
+// revoked on sign-out, each with its agent, purpose and a live expiry counter.
+async function populateSignoutTokenDetails() {
+  const box = $("signout-token-details");
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = `<div class="signout-tokens-loading">Checking active agent access…</div>`;
+  let agents = [];
+  try {
+    const resp = await fetch("/api/agents", { credentials: "include" });
+    if (resp.ok) {
+      const body = await resp.json();
+      agents = Array.isArray(body.agents) ? body.agents : [];
+    }
+  } catch (_) { /* network — fall through to empty state */ }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  // Application session token (token-A) — always present for a signed-in user.
+  // Signing out revokes this and ends the session. (Sign-out section only shows
+  // this; per-agent OBO token detail lives in the Agents panel.)
+  const orch = agents.find((a) => a.agent_id === "orchestrator");
+  if (!orch || !orch.session_token) {
+    box.hidden = true;
+    return;
+  }
+  const st = orch.session_token;
+  const exp = st.expires_at || 0;
+  box.innerHTML =
+    `<div class="signout-orch">` +
+      `<p class="signout-tokens-title">Application session</p>` +
+      `<div class="signout-orch-row">` +
+        `<span class="signout-token-agent">Application</span>` +
+        (orch.oauth_client_id
+          ? `<code class="signout-orch-client">${escapeHtml(orch.oauth_client_id)}</code>` : "") +
+        `<span class="signout-token-expiry">session expires in ` +
+          `<span class="js-countdown" data-exp="${exp}">${_fmtCountdown(Math.max(0, exp - now))}</span></span>` +
+      `</div>` +
+    `</div>`;
+  _startSignoutCountdown();
 }
 
 async function terminateAgentTokens(agentId, tokenId, btn) {
@@ -2378,6 +2574,7 @@ function appendUserMessage(text) {
   el.className = "msg msg-user";
   el.textContent = text;
   $("chat-transcript").appendChild(el);
+  recordChatMessage("user", text);
   scrollChat();
 }
 
@@ -2387,6 +2584,7 @@ function appendAssistantMessage(content) {
   // Render plain text; no markdown library dependency for Sprint 1 simplicity
   el.textContent = content;
   $("chat-transcript").appendChild(el);
+  recordChatMessage("assistant", content);
   scrollChat();
 }
 
@@ -2395,6 +2593,7 @@ function appendErrorMessage(text) {
   el.className = "msg msg-error";
   el.textContent = text;
   $("chat-transcript").appendChild(el);
+  recordChatMessage("error", text);
   scrollChat();
 }
 
@@ -2403,6 +2602,7 @@ function appendStatusLine(text, cssClass) {
   el.className = "msg msg-status " + (cssClass || "");
   el.textContent = text;
   $("chat-transcript").appendChild(el);
+  recordChatMessage("status", text, cssClass);
   scrollChat();
 }
 

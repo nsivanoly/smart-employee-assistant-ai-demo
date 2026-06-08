@@ -1,10 +1,10 @@
 # Applies to builds whose context is the repo root (the 5 Python services).
-# The wso2is image uses its own context (./wso2-is-pack), so excluding the
+# The wso2is image uses its own context (./wso2-is), so excluding the
 # ~400 MB IS pack here does NOT affect that build — it only keeps it out of the
 # Python services' build context (was 409 MB -> a few MB), speeding every build.
 
 # Heavy / unrelated to the Python service images
-wso2-is-pack/
+wso2-is/
 tempz/
 docs/
 platform/

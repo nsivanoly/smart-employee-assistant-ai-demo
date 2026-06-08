@@ -658,6 +658,82 @@ textarea, input {
   flex-shrink: 0;
 }
 
+/* Sign-out dialog: active OBO token summary + live expiry countdown. */
+.signout-tokens {
+  flex: 1 1 100%;
+  border-top: 1px solid var(--border-muted);
+  margin-top: 0.25rem;
+  padding-top: 0.5rem;
+}
+.signout-tokens-loading,
+.signout-tokens-empty {
+  color: var(--text-subtle);
+  font-size: 0.8rem;
+}
+.signout-tokens-title {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+.signout-tokens-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 8.5rem;
+  overflow-y: auto;
+}
+.signout-token-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+.signout-token-agent {
+  font-weight: 600;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+.signout-token-purpose {
+  color: var(--text-muted);
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signout-token-expiry {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+.signout-token-expiry .js-countdown {
+  font-weight: 600;
+  color: var(--amber);
+}
+.signout-orch {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px dashed var(--border-muted);
+}
+.signout-orch-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  flex-wrap: wrap;
+}
+.signout-orch-client {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--surface-alt);
+  border: 1px solid var(--border-muted);
+  border-radius: 4px;
+  padding: 0 0.3rem;
+}
+
 .btn-danger-primary {
   background: var(--danger) !important;
   border-color: var(--danger-hover) !important;
@@ -2400,6 +2476,7 @@ textarea, input {
   letter-spacing: .04em; color: var(--text-subtle);
 }
 .agent-meta-v { font-size: 12px; }
+.agent-meta-hint { color: var(--text-subtle); font-size: 11px; }
 .agent-meta code, .scope-chip, .agent-token-jti {
   background: var(--surface); border: 1px solid var(--border-muted);
   border-radius: 5px; padding: 1px 6px; font-size: 11.5px; color: var(--text);

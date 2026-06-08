@@ -6,6 +6,7 @@
   "url": "http://it_agent:8002",
   "oauth_client_id": "it-agent-oauth",
   "api_version": "1.0.0",
+  "token_validity_seconds": 180,
   "skills": [
     {
       "id": "it.list_available_assets",

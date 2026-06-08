@@ -211,6 +211,8 @@
     <div id="signout-dialog" class="signout-dialog" hidden role="dialog" aria-labelledby="signout-dialog-title">
       <p id="signout-dialog-title" class="dialog-title">Sign out?</p>
       <p class="dialog-body" id="signout-dialog-body">You will be signed out of the assistant and any agents that acted on your behalf will lose their access.</p>
+      <!-- Live OBO token summary: which agent tokens are active and when they expire. -->
+      <div id="signout-token-details" class="signout-tokens" hidden></div>
       <div class="dialog-actions">
         <button class="btn-primary btn-danger-primary" id="signout-confirm-btn">Sign out</button>
         <button class="btn-ghost" id="signout-cancel-btn">Stay signed in</button>

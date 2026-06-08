@@ -176,8 +176,12 @@ Sign in at `http://localhost:8090` (local Basic or "Sign in with UAEPass"), then
 (audit panel). See [Agents panel & audit traces](#agents-panel--audit-traces).
 
 > **Consent caching (UC-06):** after you approve once, the agent caches the token
-> for ~1 hour, so repeat actions are silent. To force the consent UX again, restart
-> the agents: `docker compose restart hr_agent it_agent`.
+> for its lifetime, so repeat actions are silent. The OBO (token-B) lifetime is set
+> **per agent** by the IS bootstrap — **HR Agent = 2 min, IT Agent = 3 min** by
+> default (`ensure_agent_oidc_settings` in `scripts/bootstrap-wso2is-entrypoint.sh`;
+> mirrored in each `apps/orchestrator/agent_cards/*.json` as `token_validity_seconds`).
+> Once it expires the next action re-prompts for consent, or restart the agents to
+> force it sooner: `docker compose restart hr_agent it_agent`.
 
 ---
 
@@ -192,9 +196,12 @@ A live fleet view for the signed-in user:
 - **Orchestrator (BFF)** row — the confidential client. Shows its session token
   (token-A) status and only its sign-in scopes (`openid profile email`).
 - **HR Agent / IT Agent** rows — `/healthz` liveness, the agent's full authorized
-  scope set (each with a plain-English meaning), and one card per **OBO token**
-  (token-B) this session has minted: masked `jti`, issued/expiry with a live
-  countdown, the action (purpose) that minted it, and its scopes.
+  scope set (each with a plain-English meaning), the **default token validity**
+  (HR 2 min / IT 3 min, from the agent card), and one card per **OBO token**
+  (token-B) this session has minted: masked `jti`, issued time, the action (purpose)
+  that minted it, and its scopes. **Active** tokens show a live expiry countdown;
+  **expired** tokens show *when* they expired (and revoked tokens their revocation +
+  original expiry).
 - **Terminate** — revoke one token or all active tokens for an agent. This fires the
   revocation cascade (below), so the agent's cached OBO token is evicted and the token
   is revoked at WSO2 IS — the next action re-prompts for consent. Great for demoing
@@ -203,7 +210,12 @@ A live fleet view for the signed-in user:
 > Token rows survive a `--reload`/restart — the session's issued-token log is persisted
 > (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#agents-panel--audit-traces)).
 > Tokens minted *before* the first action after an upgrade won't backfill; run one new
-> action to repopulate.
+> action to repopulate. OBO tokens are also surfaced on the **synchronous/cache-hit**
+> path (not just fresh CIBA), so cached-token reuse appears here too.
+
+The **Sign out?** dialog surfaces the **Application session** (the BFF confidential
+client id + a live session-expiry countdown) so you can see exactly what signing out
+revokes.
 
 ### Audit traces (header → **Trace**)
 
@@ -222,13 +234,18 @@ One row per chat request, keyed by **`X-Request-ID`**:
 # orchestrator | chat_request …
 # hr_agent     | ciba_initiated expires_in=300s …   (consent window)
 # hr_server    | … (downstream REST)
-# hr_agent     | hr_dispatcher_token_cached exp_in_s=3600 …   (OBO token ~1 h)
+# hr_agent     | hr_dispatcher_token_cached exp_in_s=120 …   (OBO token, HR = 2 min)
 # orchestrator | chat_fan_out done
 ```
 
 > The two CIBA times mean different things: `expires_in=300s` is the **consent window**
-> (how long you have to approve); the cached OBO token's `exp` (~1 h) is the **token's
-> own life** — the one the Agents panel shows and Terminate revokes.
+> (how long you have to approve); the cached OBO token's `exp` (HR 2 min / IT 3 min) is
+> the **token's own life** — the one the Agents panel shows and Terminate revokes.
+
+> **Reload-safe:** the chat transcript and the audit-trace timeline are mirrored to
+> `sessionStorage` (keyed by session id) and rehydrated on reload, so a page refresh
+> no longer loses your conversation or traces. The Agents panel reloads from the
+> server-persisted session.
 
 ---
 

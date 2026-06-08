@@ -687,6 +687,8 @@ ensure_agent_oidc_settings() {
   local app_id="$1"
   local app_name="$2"
   local redirect_uri="$3"
+  # Optional 4th arg: agent OBO access-token lifetime in seconds (default 120s / 2 min).
+  local token_expiry="${4:-120}"
   [[ -n "$app_id" ]] || return 0
 
   http GET "/api/server/v1/applications/${app_id}/inbound-protocols/oidc"
@@ -696,8 +698,10 @@ ensure_agent_oidc_settings() {
   fi
 
   local desired
-  desired="$(jq -c --arg redir "$redirect_uri" '
+  desired="$(jq -c --arg redir "$redirect_uri" --argjson exp "$token_expiry" '
     .accessToken.type = "JWT"
+    | .accessToken.userAccessTokenExpiryInSeconds = $exp
+    | .accessToken.applicationAccessTokenExpiryInSeconds = $exp
     | .grantTypes = (((.grantTypes // []) + ["urn:openid:params:grant-type:ciba"]) | unique)
     | .callbackURLs = (if ($redir|length) > 0 then (((.callbackURLs // []) + [$redir]) | unique) else (.callbackURLs // []) end)
     | .cibaAuthenticationRequest.authReqExpiryTime = ((.cibaAuthenticationRequest.authReqExpiryTime // 0) | if . > 0 then . else 300 end)
@@ -1548,7 +1552,7 @@ main() {
   # Agent apps must mint JWT actor tokens and include CIBA grant support.
   ensure_agent_oidc_settings "$orchestrator_agent_app_id" "orchestrator-agent-oauth" "$ORCH_REDIRECT"
   ensure_agent_oidc_settings "$hr_agent_app_id" "hr-agent-oauth" "$HR_AGENT_REDIRECT"
-  ensure_agent_oidc_settings "$it_agent_app_id" "it-agent-oauth" "$IT_AGENT_REDIRECT"
+  ensure_agent_oidc_settings "$it_agent_app_id" "it-agent-oauth" "$IT_AGENT_REDIRECT" 180
 
   # Pattern C validates token-A as JWT; keep orchestrator client token format aligned.
   ensure_oidc_access_token_jwt "$orchestrator_app_id" "orchestrator-mcp-client" "$ORCH_REDIRECT"

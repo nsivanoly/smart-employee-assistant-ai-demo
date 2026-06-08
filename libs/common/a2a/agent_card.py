@@ -162,6 +162,10 @@ class AgentCard(BaseModel):
     skills: list[Skill]
     capabilities: Capabilities = Field(default_factory=Capabilities)
     auth: AuthBlock
+    # Default OBO (token-B) lifetime this agent's app issues, in seconds.
+    # Mirrors the per-app expiry set by the IS bootstrap (ensure_agent_oidc_settings);
+    # surfaced in the Agents panel as the agent's default token validity.
+    token_validity_seconds: int | None = None
 
     model_config = {"populate_by_name": True}
 

@@ -57,8 +57,10 @@ a usable authenticator for a federated user.
 If you see A2A transport errors now, check the agent is `healthy` and reachable.
 
 ## Consent no longer appears for repeat actions
-**Not a bug:** token-B is cached per `(user, scope)` for ~1 h (UC-06). To demo consent
-again: `docker compose restart hr_agent it_agent` (clears the in-memory token cache).
+**Not a bug:** token-B is cached per `(user, scope)` for its lifetime (UC-06) — by
+default **2 min (HR Agent) / 3 min (IT Agent)**, set per app by the bootstrap
+(`ensure_agent_oidc_settings`). To demo consent again before it expires:
+`docker compose restart hr_agent it_agent` (clears the in-memory token cache).
 
 ## UAEPass connector fails to load (OSGi `Could not resolve module … uaepass`)
 **Cause:** Nimbus version mismatch (connector wants `< 8`, IS ships `10.3.0`).

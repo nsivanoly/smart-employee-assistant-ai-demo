@@ -65,7 +65,7 @@ Cookie-gated; scope-checked, then forwarded to the resource servers with token-A
 ### Agents panel — `apps/orchestrator/agents/routes.py`
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `GET` | `/api/agents` | cookie | Per-user fleet view: liveness, authorized scopes, and one card per issued OBO token (masked jti, status, purpose, scopes). |
+| `GET` | `/api/agents` | cookie | Per-user fleet view: liveness, authorized scopes, default token validity (`token_validity_seconds`), and one card per issued OBO token (masked jti, status, issued/expiry, purpose, scopes). The orchestrator row carries `session_token` (token-A status + expiry). |
 | `POST` | `/api/agents/{agent_id}/revoke` | cookie | Revoke one or all active OBO tokens for an agent (fires the revocation cascade). |
 
 ### Trace — `apps/orchestrator/trace/routes.py`

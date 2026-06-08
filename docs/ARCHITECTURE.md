@@ -45,8 +45,12 @@ For any agent action, the agent calls IS `/oauth2/ciba` with `login_hint` = the 
 and its own **actor token**. IS returns an `auth_url` the SPA opens; the user approves;
 the agent polls `/oauth2/token` for **token-B** (on-behalf-of: `sub`=user,
 `act.sub`=agent, `aud`=agent, `scope`=the tool's scope). Token-B is cached per
-`(user, scope)` for ~1 h (UC-06). See `libs/common/auth/ciba_client.py` and
-`apps/*/ciba/orchestrator.py`.
+`(user, scope)` until it nears expiry (UC-06). Its lifetime is set **per agent app**
+by the bootstrap (`ensure_agent_oidc_settings`): **HR Agent = 120 s, IT Agent = 180 s**
+by default (each mirrored in `apps/orchestrator/agent_cards/*.json` as
+`token_validity_seconds`, surfaced in the Agents panel). The cache keys off the token's
+own `exp`, so changing the lifetime propagates automatically. See
+`libs/common/auth/ciba_client.py` and `apps/*/ciba/orchestrator.py`.
 
 ### MCP token validation — F-04 (six steps)
 Every MCP tool call validates token-B:
@@ -84,9 +88,14 @@ Two operator-facing surfaces, both served by the orchestrator.
 token rows are derived from that session's `completed_ciba_log`, not a global view.
 Each row carries the agent's authorized scopes (mirrors the bootstrap
 `ensure_authorized_api` grants; the orchestrator row shows only its OIDC sign-in scopes)
+plus the agent's **default token validity** (`token_validity_seconds` from the card),
 and one row per issued OBO token with a stable `token_id` (its index in the log),
-**masked jti**, status (`active`/`expired`/`revoked`), purpose, and scopes. Raw token
-material is never returned to the browser. **Terminate** walks the matching records and
+**masked jti**, status (`active`/`expired`/`revoked`), issued time, purpose, and scopes.
+Active rows show a live expiry countdown; expired/revoked rows show the expiry
+timestamp. OBO tokens are logged on both the two-phase CIBA path **and** the
+synchronous/cache-hit path (`chat/routes.py`), deduped by jti, so cached-token reuse
+appears too. Raw token material is never returned to the browser. **Terminate** walks
+the matching records and
 fires the revocation cascade: `InternalEventsClient.fan_out` → receiver denylists the
 jti (F-04 step 7) and `on_revoke` evicts the agent's OBO cache; the agent additionally
 revokes the token at IS via RFC 7009 (`/oauth2/revoke`). The jti is added to
@@ -106,6 +115,14 @@ the OTEL `ENABLE_API_TRACES` span export, which targets a collector, not the bro
 token-A **and** `completed_ciba_log` + `revoked_jtis`, so the Agents panel survives a
 reload. The store flushes (`SessionStore.persist()`) when the chat route appends an
 issued token and when the revoke route adds a jti — not only on session create/delete.
+
+**Client-side reload state.** The **chat transcript** and the **audit-trace timeline**
+are built in the browser (the server keeps only a short LLM history and per-rid HTTP
+detail), so the SPA mirrors both into `sessionStorage` keyed by session id and
+rehydrates them on resume (`hydrateChat` / `hydrateTraces` in `apps/client/app.js`),
+clearing them on sign-out. A page reload no longer loses the conversation or traces.
+The **Sign out?** dialog also fetches `/api/agents` to show the **Application session**
+(BFF client id + live session-expiry countdown).
 
 ## Build & image optimization
 

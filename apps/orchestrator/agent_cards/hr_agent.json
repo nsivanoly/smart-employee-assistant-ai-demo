@@ -6,6 +6,7 @@
   "url": "http://hr_agent:8001",
   "oauth_client_id": "hr-agent-oauth",
   "api_version": "1.0.0",
+  "token_validity_seconds": 120,
   "skills": [
     {
       "id": "hr.read_balance",

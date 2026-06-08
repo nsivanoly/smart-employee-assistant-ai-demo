@@ -307,6 +307,7 @@ def build_agents_router(deps: AgentsRouterDeps) -> APIRouter:
                     "oauth_client_id": card.oauth_client_id,
                     "scopes": scopes,
                     "revocable": True,
+                    "token_validity_seconds": getattr(card, "token_validity_seconds", None),
                     "tokens": tokens,
                     "active_token_count": active,
                 }
