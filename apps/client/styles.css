@@ -1263,6 +1263,25 @@ textarea, input {
   color: var(--text);
 }
 
+.cw-scopes-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  margin-left: 1.5rem;
+  flex-wrap: wrap;
+}
+.cw-scopes-prefix {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.cw-scopes-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
 .cw-binding-row {
   margin-left: 1.5rem;
   margin-bottom: 0.625rem;

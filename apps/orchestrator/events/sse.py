@@ -104,6 +104,11 @@ class CibaUrlEvent(BaseModel):
     # admin-action strings ("Assign cubicle C-027 to jane.doe") render
     # without the SPA having to parse the binding_message.
     action_text: str | None = None
+    # Default OBO (token-B) lifetime this agent's app issues, in seconds
+    # (from the agent card's ``token_validity_seconds``). Lets the consent
+    # widget show the real access duration ("…for another 2 min") per agent
+    # instead of a hardcoded "hour".
+    token_validity_seconds: int | None = None
 
 
 class CibaStateChangeEvent(BaseModel):

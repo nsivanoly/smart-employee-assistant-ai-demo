@@ -68,6 +68,7 @@ const COPY = {
   cwCountdown: "⏱ expires {mm:ss}",
   cwCountdownAmber: "⏱ expires {mm:ss} — almost out of time",
   cwFooter: "Each agent asks for its own approval. Your identity provider records every consent.",
+  cwFooterDuration: "Approving gives {agent_label} access for {duration}. Each agent asks for its own approval.",
 
   // §5 Consent Widget — state transitions
   cwVerifying: "Verifying with your identity provider…",
@@ -94,7 +95,7 @@ const COPY = {
   cwRefreshWantsTo: "Wants to:",
   cwReApprove: "Re-approve",
   cwSkip: "Skip",
-  cwRefreshFooter: "Approving this gives {agent_label} access for another hour.",
+  cwRefreshFooter: "Approving this gives {agent_label} access for another {duration}.",
   cwResuming: "Resuming previous request — {mm:ss} left to approve.",
 
   // §8 Sign-out
@@ -1997,6 +1998,7 @@ function onCibaUrlEvent(event) {
     expiresAt,
     actionText,
     bindingMessage: event.binding_message || null,
+    tokenValidity: event.token_validity_seconds || null,
   };
 
   renderWidget();
@@ -2105,8 +2107,9 @@ function onSseErrorEvent(event) {
 function renderWidget() {
   if (!cibaState) return;
 
-  const { isRefresh, priorConsentAt, agentId, agentLabel: label, actionText, bindingCode, expiresAt, scope } = cibaState;
+  const { isRefresh, priorConsentAt, agentId, agentLabel: label, actionText, bindingCode, expiresAt, scope, tokenValidity } = cibaState;
   const cfg = AGENT_CONFIG[agentId] || { color: "#64748b", icon: "bubble" };
+  const accessDuration = tokenValidity ? _fmtDuration(tokenValidity) : "a limited time";
 
   // Card title
   $("cw-card-title").textContent = isRefresh ? COPY.cwRefreshTitle : COPY.cwTitle;
@@ -2128,13 +2131,18 @@ function renderWidget() {
     $("cw-deny-btn").textContent = COPY.cwSkip;
 
     // Footer
-    $("cw-footer-text").textContent = COPY.cwRefreshFooter.replace("{agent_label}", label);
+    $("cw-footer-text").textContent = COPY.cwRefreshFooter
+      .replace("{agent_label}", label)
+      .replace("{duration}", accessDuration);
   } else {
     $("cw-refresh-banner").hidden = true;
     $("cw-prior-consent").hidden = true;
     $("cw-approve-btn").textContent = COPY.cwApprove;
     $("cw-deny-btn").textContent = COPY.cwDeny;
-    $("cw-footer-text").textContent = COPY.cwFooter;
+    // Show the real per-agent access duration when known; else the generic line.
+    $("cw-footer-text").textContent = tokenValidity
+      ? COPY.cwFooterDuration.replace("{agent_label}", label).replace("{duration}", accessDuration)
+      : COPY.cwFooter;
   }
 
   // Agent icon and label
@@ -2147,6 +2155,20 @@ function renderWidget() {
 
   // Action text
   $("cw-action-text").textContent = actionText;
+
+  // Scopes / access the agent's token will carry, with plain-English meanings.
+  const scopesRow = $("cw-scopes-row");
+  const scopesChips = $("cw-scopes-chips");
+  const scopeNames = (scope || "").split(/\s+/).filter(Boolean);
+  if (scopeNames.length) {
+    scopesChips.innerHTML = scopeNames.map((s) =>
+      `<code class="scope-chip" title="${escapeHtml(_scopeMeaning(s))}">${escapeHtml(s)}</code>`
+    ).join("");
+    scopesRow.hidden = false;
+  } else {
+    scopesChips.innerHTML = "";
+    scopesRow.hidden = true;
+  }
 
   // Binding code (first 8 chars)
   const shortCode = (bindingCode || "").slice(0, 8);

@@ -529,6 +529,8 @@ async def _run_serial_fan_out(
                     # Sprint 4 S4.1: forward the server-rendered action_text
                     # for parameterised admin-action copy.
                     action_text=consent.action_text,
+                    # Per-agent OBO token lifetime, for the consent footer copy.
+                    token_validity_seconds=getattr(card, "token_validity_seconds", None),
                 )
             )
 
