@@ -1,7 +1,7 @@
 # Compose topology for the Identity-First AI Agent Governance POC (v4).
 #
 # Six services (local IdP + app services):
-#   - wso2is        : local WSO2 Identity Server from bundled zip pack
+#   - wso2is        : WSO2 Identity Server (official wso2/wso2is image from Docker Hub)
 #   - orchestrator  : SPA host + chat router + CIBA fan-out + reports proxy
 #                     (http://localhost:8090)
 #   - hr_agent      : HR specialist; per-agent CIBA → hr_server MCP tools
@@ -28,8 +28,8 @@ services:
       context: ./wso2-is
       dockerfile: Dockerfile
       args:
-        # WSO2 IS version (>= 7.3.0). The matching wso2is-<version>.zip must be
-        # present in wso2-is/pack/. Override via env: WSO2IS_VERSION=7.4.0 ./start.sh
+        # WSO2 IS version (>= 7.3.0). Pulls wso2/wso2is:<version>-alpine from
+        # Docker Hub. Override via env: WSO2IS_VERSION=7.4.0 ./start.sh
         WSO2IS_VERSION: ${WSO2IS_VERSION:-7.3.0}
     environment:
       - BOOTSTRAP_ON_START=${WSO2_BOOTSTRAP_ON_START:-true}
@@ -39,6 +39,9 @@ services:
       - IS_ADMIN_USER=${IS_ADMIN_USER:-admin}
       - IS_ADMIN_PASS=${IS_ADMIN_PASS:-admin}
       - IS_AGENT_OWNER=${IS_AGENT_OWNER:-admin@carbon.super}
+      # NOTE: ENABLE_UAEPASS is NOT passed here — the bootstrap reads it straight
+      # from config/master.env (mounted at /workspace/config/master.env), making
+      # master.env the single source of truth (no shell/compose env dependency).
     ports:
       - "9443:9443"
       - "9763:9763"
@@ -136,6 +139,9 @@ services:
       # orchestrator/main.py StaticFiles (the legacy `client:3001` container
       # is no longer the SPA host).
       - POST_LOGOUT_REDIRECT_URI=${POST_LOGOUT_REDIRECT_URI:-http://localhost:8090/}
+      # NOTE: ENABLE_UAEPASS is NOT passed here — it's rendered into
+      # apps/orchestrator/.env from master.env (env_file above), so master.env is
+      # the single source of truth for the SPA branding flag.
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]

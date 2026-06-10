@@ -132,6 +132,12 @@ textarea, input {
   background: linear-gradient(160deg, #EF3F26 0%, #00843D 35%, #f0f0f0 65%, #1a1a1a 100%);
 }
 
+/* Generic (non-UAEPass) sign-in background — neutral teal/green, no UAE flag
+   colours. Applied via body.generic-brand by app.js when uaepass_enabled=false. */
+body.generic-brand #signin-page {
+  background: linear-gradient(160deg, #0a7d5a 0%, #0f766e 45%, #e9eef0 100%);
+}
+
 .signin-box {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -222,6 +228,30 @@ textarea, input {
   width: 250px;
   height: 50px;
   max-width: 100%;
+}
+
+/* Generic (non-UAEPass) sign-in button — solid pill with a text label,
+   applied by app.js when uaepass_enabled=false. */
+.signin-btn-uaepass.signin-btn-generic {
+  background: #0a7d5a;
+  border-radius: 12px;
+  height: 44px;
+  padding: 0 24px;
+}
+.signin-btn-uaepass.signin-btn-generic:hover {
+  opacity: 1;
+  background: #096b4d;
+}
+.signin-btn-label {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+/* Generic "Secured by …" line — drop the UAE PASS flex/icon layout. */
+.signin-powered-by.signin-powered-generic {
+  display: block;
+  text-align: center;
 }
 
 .signin-powered-by {

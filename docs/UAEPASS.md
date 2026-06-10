@@ -22,10 +22,21 @@ All of this is reproduced on a clean start by `scripts/bootstrap-wso2is-entrypoi
    authenticate federated users). All apps set `useMappedLocalSubject=true` and
    `skipLoginConsent=true`.
 5. **Branding** (`set_app_branding`) — UAE PASS logo/title/colour/links applied at
-   **APP scope** on the client login app only (not org-wide / Console).
+   **APP scope** on the client login app only (not org-wide / Console). Both branding
+   functions build on WSO2's full default theme (`wso2-is/default/sample-payload.json`)
+   so the login page is always fully styled; `set_app_branding` overlays only the UAE
+   PASS specifics.
 6. **JIT target users** — `sivanoly@wso2.com` (HR Admin) and `ramith@wso2.com`
    (employee) are pre-created so federated logins associate to accounts that already
    carry the right roles.
+
+When `ENABLE_UAEPASS=false` the bootstrap instead **detaches** UAEPass from all login
+sequences and applies neutral **Smart Employee** branding (`set_generic_branding`):
+the same default theme overlaid only with the Smart Employee logo
+(`wso2-is/default/smart-employee-logo.jpeg`, deployed into the IS image) and a
+`© {{currentYear}} Smart Employee` copyright. The flag's single source of truth is
+`config/master.env` — the IS bootstrap reads it from the mounted file and the
+orchestrator gets it rendered into its `.env`.
 
 ## Connector compatibility (IS 7.3 / Nimbus 10)
 

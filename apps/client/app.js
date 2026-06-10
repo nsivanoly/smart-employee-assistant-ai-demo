@@ -468,6 +468,16 @@ let requestInFlight = false;   // true while a chat request is live
 let pendingUserMessage = null; // saved for Retry / Re-approve
 let pendingRequestId = null;   // X-Request-ID for the in-flight chat call
 let cibaState = null;          // current widget state object
+let _consentWindow = null;     // handle to the IS consent popup (to auto-close it)
+
+// Close the IS consent popup if it's still open (called when SSE reports the
+// flow finished: done / denied / expired / error, or on dismiss).
+function _closeConsentWindow() {
+  try {
+    if (_consentWindow && !_consentWindow.closed) _consentWindow.close();
+  } catch (_) { /* cross-origin / already closed — ignore */ }
+  _consentWindow = null;
+}
 
 // cibaState shape:
 // {
@@ -485,8 +495,59 @@ let routingCount = 0;
 
 // ─── Initialization ──────────────────────────────────────────────────────────
 
+// Generic (non-UAEPass) sign-in branding. Applied when the orchestrator reports
+// uaepass_enabled=false so the login page reads as a plain IAM, not UAE PASS.
+const GENERIC_BRANDING = {
+  heading: "Smart Employee Assistant",
+  subtitle: "Sign in to manage your leave, equipment, and team requests.",
+  ctaLabel: "Sign in",
+  poweredBy: "Secured by WSO2 Identity Server",
+};
+
+// Fetch the public app-config and, if UAEPass is disabled, rewrite the sign-in
+// page's UAE PASS branding (heading, subtitle, button, "Powered by UAE PASS …")
+// to generic IAM copy. Defaults to UAEPass branding (the HTML's baked-in form)
+// on any error so a config blip never blanks the login page.
+async function applyAppConfig() {
+  let uaepassEnabled = true;
+  try {
+    const resp = await fetch("/api/app-config", { credentials: "include" });
+    if (resp.ok) {
+      const cfg = await resp.json();
+      uaepassEnabled = cfg.uaepass_enabled !== false;
+    }
+  } catch (_) {
+    /* network blip — keep the default UAEPass branding */
+  }
+  if (uaepassEnabled) return; // HTML already carries the UAEPass branding
+
+  // Flip page-level brand styling (sign-in background gradient, etc.) to generic.
+  document.body.classList.add("generic-brand");
+
+  const heading = $("signin-heading");
+  if (heading) heading.textContent = GENERIC_BRANDING.heading;
+  const subtitle = $("signin-subtitle");
+  if (subtitle) subtitle.textContent = GENERIC_BRANDING.subtitle;
+  const btn = $("signin-btn");
+  if (btn) {
+    btn.innerHTML = `<span class="signin-btn-label">${GENERIC_BRANDING.ctaLabel}</span>`;
+    btn.setAttribute("aria-label", GENERIC_BRANDING.ctaLabel);
+    btn.classList.add("signin-btn-generic");
+  }
+  const powered = $("signin-powered-by");
+  if (powered) {
+    powered.textContent = GENERIC_BRANDING.poweredBy;
+    powered.classList.add("signin-powered-generic");
+  }
+  // Drop "UAE" from the page title and the in-app header product name.
+  document.title = GENERIC_BRANDING.heading;
+  const productName = $("product-name-home");
+  if (productName) productName.textContent = GENERIC_BRANDING.heading;
+}
+
 async function init() {
   wireStaticUI();
+  await applyAppConfig();
 
   const params = new URLSearchParams(window.location.search);
 
@@ -2322,6 +2383,7 @@ function transitionWidgetToDenied() {
 
 function transitionWidgetToExpired() {
   stopCountdown();
+  _closeConsentWindow();
   if (!cibaState) return;
 
   const { agentLabel: label } = cibaState;
@@ -2346,6 +2408,7 @@ function transitionWidgetToExpired() {
 
 function transitionWidgetToError(event) {
   stopCountdown();
+  _closeConsentWindow();
   if (!cibaState) return;
 
   const { agentLabel: label, authReqId } = cibaState;
@@ -2401,8 +2464,12 @@ function onApproveClick() {
     rid: cibaState.requestId,
     agentId: cibaState.agentId,
   });
-  // Open IS consent URL in a new tab
-  window.open(cibaState.authUrl, "_blank", "noopener,noreferrer");
+  // Open the IS consent URL in a separate popup window (not a tab). A named
+  // window + popup=yes + explicit size makes browsers open a real window;
+  // reusing the name "is_consent" replaces any prior consent window. Keep the
+  // handle so we can auto-close it once SSE reports the flow finished — IS's
+  // device_success.do page is not ours to inject a self-close script into.
+  _consentWindow = window.open(cibaState.authUrl, "is_consent", "width=600,height=700,popup=yes");
   // Transition to VERIFYING visually — actual confirmation comes via SSE
   cibaState.widgetState = "VERIFYING";
   transitionWidgetToVerifying();
@@ -2461,6 +2528,7 @@ let _dismissWidgetTimer = null;
 
 function dismissWidget() {
   stopCountdown();
+  _closeConsentWindow();
   const widget = $("consent-widget");
   widget.classList.remove("consent-widget--visible");
   // After transition, hide. Track the timer so renderWidget() can cancel
@@ -2487,6 +2555,7 @@ function dismissWidget() {
 
 function clearWidgetState() {
   stopCountdown();
+  _closeConsentWindow();
   const widget = $("consent-widget");
   if (widget) {
     widget.hidden = true;

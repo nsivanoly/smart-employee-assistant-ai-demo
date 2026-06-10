@@ -27,14 +27,15 @@ data.txt
 .vscode/
 platform/
 
-# ── Large provided artifact (~400 MB; downloaded out-of-band, not committed) ─
-# Any IS version (wso2is-7.3.0.zip, wso2is-7.4.0.zip, …) — never commit the pack.
-wso2-is/pack/wso2is-*.zip
-# Belt-and-suspenders: ignore the IS pack zip wherever it lands.
+# ── WSO2 IS pack zip (legacy; image now pulled from Docker Hub) ─────────────
+# The IS server is no longer built from a local zip — wso2-is/Dockerfile bases
+# off the official wso2/wso2is:<version>-alpine image. Keep ignoring any stray
+# pack zip so an old/downloaded copy can never be committed by accident.
 **/wso2is-*.zip
-# NOTE: the small connector JAR, logo, error JSP (wso2-is/uaepass/) and the
-# entrypoint (wso2-is/entrypoint/) ARE committed (they're the build inputs) —
-# do not add a blanket *.jar/*.zip rule. The pack/.gitkeep keeps the dir present.
+# NOTE: the small connector JAR, logo, error JSP (wso2-is/uaepass/), the
+# entrypoint (wso2-is/entrypoint/), and the default login-page assets
+# (wso2-is/default/ — smart-employee-logo.jpeg + sample-payload.json branding
+# base) ARE committed — they're the build inputs.
 
 # ── Runtime cruft / logs / markers ─────────────────────────────────────────
 *.log
@@ -76,3 +77,4 @@ yarn-error.log*
 **/.DS_Store
 .idea/
 *.iml
+wso2-is/default/sample-payload.json

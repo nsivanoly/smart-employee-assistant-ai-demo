@@ -791,40 +791,20 @@ ensure_logout_callback_regex() {
   fi
 }
 
-# Provision the confidential orchestrator-mcp-client app end to end (the BFF login client).
-ensure_orchestrator_app() {
-  local client_id="$1"
-  local client_secret="$2"
-  local redirect_uri="$3"
-  local post_logout_uri="$4"
-
-  [[ -n "$client_id" ]] || { warn "missing ORCHESTRATOR_MCP_CLIENT_ID; skipping app create"; return 0; }
-
-  local app_id
-  app_id="$(find_app_by_client_id "$client_id")"
-  if [[ -n "$app_id" ]]; then
-    log "orchestrator OAuth app exists"
-    return 0
-  fi
-
-  [[ -n "$client_secret" ]] || { warn "missing ORCHESTRATOR_MCP_CLIENT_SECRET; cannot create app"; return 0; }
-
-  local payload
-  payload="$(jq -n --arg name "orchestrator-mcp-client" --arg cid "$client_id" --arg csec "$client_secret" --arg redir "$redirect_uri" --arg post "$post_logout_uri" '{
-    client_name:$name,
-    client_id:$cid,
-    client_secret:$csec,
-    grant_types:["authorization_code","refresh_token"],
-    redirect_uris:[$redir],
-    post_logout_redirect_uris:[$post]
-  }')"
-
-  http POST "/api/identity/oauth2/dcr/v1.1/register" "$payload"
-  if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
-    log "created orchestrator OAuth app"
-  else
-    warn "failed to create orchestrator OAuth app (HTTP ${HTTP_CODE})"
-  fi
+# Build a DCR (dynamic client registration) JSON body. Confidential clients pass
+# a client_secret; public clients pass "" and set auth_method=none. Optional
+# fields (secret, redirect, post-logout, auth-method) are included only when set,
+# so this one helper covers every register payload the bootstrap needs.
+build_dcr_payload() {
+  local name="$1" cid="$2" csec="$3" redir="$4" post="$5" grants_json="$6" auth_method="${7:-}"
+  jq -n --arg name "$name" --arg cid "$cid" --arg csec "$csec" \
+        --arg redir "$redir" --arg post "$post" --arg am "$auth_method" --argjson grants "$grants_json" '
+    {client_name:$name, client_id:$cid, grant_types:$grants}
+    + (if ($csec|length)  > 0 then {client_secret:$csec}                 else {} end)
+    + (if ($redir|length) > 0 then {redirect_uris:[$redir]}              else {} end)
+    + (if ($post|length)  > 0 then {post_logout_redirect_uris:[$post]}   else {} end)
+    + (if ($am|length)    > 0 then {token_endpoint_auth_method:$am}      else {} end)
+  '
 }
 
 # Provision an agent OAuth client app (hr/it/orchestrator-agent) with CIBA + JWT settings.
@@ -856,182 +836,24 @@ ensure_service_provider_app() {
 
   local grants_json payload
   grants_json="$(printf '%s\n' "${grant_types[@]}" | sed '/^$/d' | jq -R . | jq -s '.')"
-
-  if [[ -n "$redirect_uri" && -n "$post_logout_uri" ]]; then
-    payload="$(jq -n \
-      --arg name "$app_name" \
-      --arg cid "$client_id" \
-      --arg csec "$client_secret" \
-      --arg redir "$redirect_uri" \
-      --arg post "$post_logout_uri" \
-      --argjson grants "$grants_json" \
-      '{
-        client_name:$name,
-        client_id:$cid,
-        client_secret:$csec,
-        grant_types:$grants,
-        redirect_uris:[$redir],
-        post_logout_redirect_uris:[$post]
-      }')"
-  elif [[ -n "$redirect_uri" ]]; then
-    payload="$(jq -n \
-      --arg name "$app_name" \
-      --arg cid "$client_id" \
-      --arg csec "$client_secret" \
-      --arg redir "$redirect_uri" \
-      --argjson grants "$grants_json" \
-      '{
-        client_name:$name,
-        client_id:$cid,
-        client_secret:$csec,
-        grant_types:$grants,
-        redirect_uris:[$redir]
-      }')"
-  else
-    payload="$(jq -n \
-      --arg name "$app_name" \
-      --arg cid "$client_id" \
-      --arg csec "$client_secret" \
-      --argjson grants "$grants_json" \
-      '{
-        client_name:$name,
-        client_id:$cid,
-        client_secret:$csec,
-        grant_types:$grants
-      }')"
-  fi
+  payload="$(build_dcr_payload "$app_name" "$client_id" "$client_secret" "$redirect_uri" "$post_logout_uri" "$grants_json")"
 
   http POST "/api/identity/oauth2/dcr/v1.1/register" "$payload"
   if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
     log "created service provider: ${app_name}"
-  else
-    # Fallback for IS builds that reject non-default grant types via DCR.
-    local fallback_grants fallback_payload
-    fallback_grants='["authorization_code","refresh_token"]'
-    if [[ -n "$redirect_uri" && -n "$post_logout_uri" ]]; then
-      fallback_payload="$(jq -n \
-        --arg name "$app_name" \
-        --arg cid "$client_id" \
-        --arg csec "$client_secret" \
-        --arg redir "$redirect_uri" \
-        --arg post "$post_logout_uri" \
-        --argjson grants "$fallback_grants" \
-        '{
-          client_name:$name,
-          client_id:$cid,
-          client_secret:$csec,
-          grant_types:$grants,
-          redirect_uris:[$redir],
-          post_logout_redirect_uris:[$post]
-        }')"
-    elif [[ -n "$redirect_uri" ]]; then
-      fallback_payload="$(jq -n \
-        --arg name "$app_name" \
-        --arg cid "$client_id" \
-        --arg csec "$client_secret" \
-        --arg redir "$redirect_uri" \
-        --argjson grants "$fallback_grants" \
-        '{
-          client_name:$name,
-          client_id:$cid,
-          client_secret:$csec,
-          grant_types:$grants,
-          redirect_uris:[$redir]
-        }')"
-    else
-      fallback_payload="$(jq -n \
-        --arg name "$app_name" \
-        --arg cid "$client_id" \
-        --arg csec "$client_secret" \
-        --argjson grants "$fallback_grants" \
-        '{
-          client_name:$name,
-          client_id:$cid,
-          client_secret:$csec,
-          grant_types:$grants
-        }')"
-    fi
-    http POST "/api/identity/oauth2/dcr/v1.1/register" "$fallback_payload"
-    if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
-      log "created service provider with fallback grants: ${app_name}"
-    else
-      if [[ "$HTTP_CODE" == "400" ]] && jq -e '.error=="invalid_client_metadata" and ((.error_description // "") | test("already exist"; "i"))' >/dev/null 2>&1 <<<"$HTTP_BODY"; then
-        log "service provider already exists by name: ${app_name}"
-        return 0
-      fi
-      warn "failed to create service provider ${app_name} (HTTP ${HTTP_CODE})"
-      [[ -n "$HTTP_BODY" ]] && warn "${app_name} response: ${HTTP_BODY}"
-    fi
-  fi
-}
-
-# Provision a public (no-secret) SPA-style OAuth client app.
-ensure_public_service_provider_app() {
-  local app_name="$1"
-  local client_id="$2"
-  local redirect_uri="$3"
-  shift 3
-  local grant_types=("$@")
-
-  [[ -n "$client_id" ]] || { warn "missing client_id for ${app_name}; skipping"; return 0; }
-  [[ -n "$redirect_uri" ]] || { warn "missing redirect_uri for ${app_name}; skipping"; return 0; }
-
-  local existing_id
-  existing_id="$(find_app_by_client_id "$client_id")"
-  if [[ -n "$existing_id" ]]; then
-    log "service provider exists: ${app_name}"
     return 0
   fi
 
-  existing_id="$(find_app_by_name "$app_name")"
-  if [[ -n "$existing_id" ]]; then
-    log "service provider exists by name: ${app_name}"
-    return 0
-  fi
-
-  local grants_json payload
-  grants_json="$(printf '%s\n' "${grant_types[@]}" | sed '/^$/d' | jq -R . | jq -s '.')"
-
-  payload="$(jq -n \
-    --arg name "$app_name" \
-    --arg cid "$client_id" \
-    --arg redir "$redirect_uri" \
-    --argjson grants "$grants_json" \
-    '{
-      client_name:$name,
-      client_id:$cid,
-      grant_types:$grants,
-      redirect_uris:[$redir],
-      token_endpoint_auth_method:"none"
-    }')"
-
-  http POST "/api/identity/oauth2/dcr/v1.1/register" "$payload"
+  # Fallback for IS builds that reject non-default grant types via DCR.
+  local fallback_payload
+  fallback_payload="$(build_dcr_payload "$app_name" "$client_id" "$client_secret" "$redirect_uri" "$post_logout_uri" '["authorization_code","refresh_token"]')"
+  http POST "/api/identity/oauth2/dcr/v1.1/register" "$fallback_payload"
   if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
-    log "created public service provider: ${app_name}"
-    return 0
-  fi
-
-  payload="$(jq -n \
-    --arg name "$app_name" \
-    --arg cid "$client_id" \
-    --arg redir "$redirect_uri" \
-    --argjson grants "$grants_json" \
-    '{
-      client_name:$name,
-      client_id:$cid,
-      grant_types:$grants,
-      redirect_uris:[$redir]
-    }')"
-
-  http POST "/api/identity/oauth2/dcr/v1.1/register" "$payload"
-  if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
-    log "created public service provider (fallback payload): ${app_name}"
+    log "created service provider with fallback grants: ${app_name}"
+  elif [[ "$HTTP_CODE" == "400" ]] && jq -e '.error=="invalid_client_metadata" and ((.error_description // "") | test("already exist"; "i"))' >/dev/null 2>&1 <<<"$HTTP_BODY"; then
+    log "service provider already exists by name: ${app_name}"
   else
-    if [[ "$HTTP_CODE" == "400" ]] && jq -e '.error=="invalid_client_metadata" and ((.error_description // "") | test("already exist"; "i"))' >/dev/null 2>&1 <<<"$HTTP_BODY"; then
-      log "service provider already exists by name: ${app_name}"
-      return 0
-    fi
-    warn "failed to create public service provider ${app_name} (HTTP ${HTTP_CODE})"
+    warn "failed to create service provider ${app_name} (HTTP ${HTTP_CODE})"
     [[ -n "$HTTP_BODY" ]] && warn "${app_name} response: ${HTTP_BODY}"
   fi
 }
@@ -1217,49 +1039,135 @@ attach_uaepass_to_app() {
   fi
 }
 
-# Apply UAE PASS branding to a SINGLE application's login page (APP scope) so
-# only that app's sign-in reflects UAEPass — the WSO2 Console and other apps
-# keep the default IS branding. ``app_id`` is the IS application UUID.
+# Reset an app's login to local Basic auth only — removing any UAEPass option a
+# prior UAEPass-mode run may have attached. Makes ENABLE_UAEPASS=false take
+# effect even on an existing IS volume (without it, the hosted login page keeps
+# showing "Sign in with UAEPass"). ``app_id`` is the IS application UUID.
+detach_uaepass_from_app() {
+  local app_id="$1"
+  [[ -n "$app_id" ]] || { warn "detach_uaepass: missing app_id"; return 0; }
+
+  local seq
+  seq="$(jq -n '{
+    authenticationSequence: {
+      type: "DEFAULT",
+      steps: [
+        {
+          id: 1,
+          options: [
+            { idp: "LOCAL", authenticator: "BasicAuthenticator" }
+          ]
+        }
+      ]
+    }
+  }')"
+  http PATCH "/api/server/v1/applications/${app_id}" "$seq"
+  if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]]; then
+    log "reset app ${app_id} to local-only login (UAEPass detached)"
+  else
+    warn "failed to reset login sequence for app ${app_id} (HTTP ${HTTP_CODE})"
+    [[ -n "$HTTP_BODY" ]] && warn "detach response: ${HTTP_BODY:0:300}"
+  fi
+}
+
+# Apply branding to a SINGLE application's login page (APP scope) so only that
+# app's IS-hosted sign-in reflects it — the WSO2 Console and other apps keep the
+# default IS branding. ``app_id`` is the IS application UUID. Only used in
+# UAEPass mode — default-IAM mode clears branding instead (see delete_app_branding).
 # Idempotent: POST if absent, PUT if already configured.
-# Apply the demo login-page branding (logo, colors, text) to an app.
 set_app_branding() {
   local app_id="$1"
   [[ -n "$app_id" ]] || { warn "set_app_branding: missing app_id"; return 0; }
   local logo="https://localhost:9443/authenticationendpoint/libs/themes/default/assets/images/identity-providers/uaepass-logo.png"
-  local payload
-  payload="$(jq -n --arg logo "$logo" --arg app "$app_id" '{
-    type: "APP", name: $app, locale: "en-US",
-    preference: {
-      configs: { isBrandingEnabled: true },
-      organizationDetails: {
-        displayName: "UAE PASS", siteTitle: "UAE PASS",
-        copyrightText: "© 2026 UAE PASS", supportEmail: "support@uaepass.ae"
-      },
-      theme: {
-        activeTheme: "LIGHT",
-        LIGHT: {
-          images: { logo: { imgURL: $logo, altText: "UAE PASS" } },
-          colors: { primary: { main: "#00754A" } }
-        }
-      },
-      urls: {
-        privacyPolicyURL: "https://uaepass.ae/",
-        termsOfUseURL: "https://uaepass.ae/",
-        cookiePolicyURL: "https://uaepass.ae/"
-      }
-    }
-  }')"
-
-  http GET "/api/server/v1/branding-preference?type=APP&name=${app_id}&locale=en-US"
-  if [[ "$HTTP_CODE" == "200" ]]; then
-    http PUT "/api/server/v1/branding-preference" "$payload"
-  else
-    http POST "/api/server/v1/branding-preference" "$payload"
+  local sample="${PROJECT_ROOT}/wso2-is/default/sample-payload.json"
+  if [[ ! -f "$sample" ]]; then
+    warn "UAEPass branding base payload not found: ${sample}"
+    return 0
   fi
+
+  # Start from WSO2's FULL default theme (complete borders/fonts/colours) so the
+  # login page renders properly, then overlay only the UAE PASS specifics: scope
+  # (APP / this app), logo, name, copyright, primary colour and policy URLs.
+  local logo_obj payload
+  logo_obj="$(jq -n --arg url "$logo" '{imgURL:$url, altText:"UAE PASS"}')"
+  payload="$(jq --arg app "$app_id" --argjson logo "$logo_obj" '
+      .type = "APP"
+    | .name = $app
+    | .locale = "en-US"
+    | .preference.organizationDetails.displayName = "UAE PASS"
+    | .preference.organizationDetails.siteTitle = "UAE PASS"
+    | .preference.organizationDetails.copyrightText = "© {{currentYear}} UAE PASS"
+    | .preference.organizationDetails.supportEmail = "support@uaepass.ae"
+    | .preference.theme.LIGHT.images.logo = $logo
+    | .preference.theme.DARK.images.logo = $logo
+    | .preference.theme.LIGHT.colors.primary.main = "#00754A"
+    | .preference.theme.DARK.colors.primary.main = "#00754A"
+    | .preference.urls.privacyPolicyURL = "https://uaepass.ae/"
+    | .preference.urls.termsOfUseURL = "https://uaepass.ae/"
+    | .preference.urls.cookiePolicyURL = "https://uaepass.ae/"
+  ' "$sample")"
+
+  # Wipe any existing preference first, then create fresh — a PUT can MERGE with
+  # the previous mode's fields (e.g. leftover generic copyright), so delete-then-
+  # POST guarantees the stored branding is EXACTLY this UAEPass payload.
+  http DELETE "/api/server/v1/branding-preference?type=APP&name=${app_id}&locale=en-US"
+  http POST "/api/server/v1/branding-preference" "$payload"
   if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
     log "applied UAE PASS app branding to ${app_id}"
   else
     warn "failed to apply app branding to ${app_id} (HTTP ${HTTP_CODE}): ${HTTP_BODY:0:200}"
+  fi
+}
+
+# Remove any APP-scope branding preference for an app so its login reverts to
+# the stock default WSO2 IS look. Used in default-IAM mode (ENABLE_UAEPASS=false)
+# to clear branding a prior UAEPass-mode run may have applied. Idempotent: a 404
+# (nothing to delete) is treated as success. ``app_id`` is the IS application UUID.
+delete_app_branding() {
+  local app_id="$1"
+  [[ -n "$app_id" ]] || { warn "delete_app_branding: missing app_id"; return 0; }
+  http DELETE "/api/server/v1/branding-preference?type=APP&name=${app_id}&locale=en-US"
+  if [[ "$HTTP_CODE" == "204" || "$HTTP_CODE" == "200" || "$HTTP_CODE" == "404" ]]; then
+    log "cleared app branding for ${app_id} (default WSO2 IS look)"
+  else
+    warn "failed to clear app branding for ${app_id} (HTTP ${HTTP_CODE}): ${HTTP_BODY:0:200}"
+  fi
+}
+
+# Default-IAM (ENABLE_UAEPASS=false) branding. Uses WSO2's FULL default theme
+# (wso2-is/default/sample-payload.json — complete borders/fonts/colours so the
+# login page renders exactly like the stock WSO2 default) and overrides only:
+#   - scope: APP / this app (the sample is ORG-scoped; we never touch the org)
+#   - the page logo (smart-employee-logo.jpeg, served by URL)
+#   - the footer copyright (``{{currentYear}}`` is a WSO2 token expanded at render)
+# Idempotent: delete-then-POST so nothing from a prior mode lingers.
+set_generic_branding() {
+  local app_id="$1"
+  [[ -n "$app_id" ]] || { warn "set_generic_branding: missing app_id"; return 0; }
+  local logo="https://localhost:9443/authenticationendpoint/libs/themes/default/assets/images/smart-employee-logo.jpeg"
+  local sample="${PROJECT_ROOT}/wso2-is/default/sample-payload.json"
+  if [[ ! -f "$sample" ]]; then
+    warn "generic branding base payload not found: ${sample}"
+    return 0
+  fi
+
+  local logo_obj payload
+  logo_obj="$(jq -n --arg url "$logo" '{imgURL:$url, altText:"Smart Employee"}')"
+  payload="$(jq --arg app "$app_id" --argjson logo "$logo_obj" '
+      .type = "APP"
+    | .name = $app
+    | .locale = "en-US"
+    | .preference.organizationDetails.copyrightText = "© {{currentYear}} Smart Employee"
+    | .preference.theme.LIGHT.images.logo = $logo
+    | .preference.theme.DARK.images.logo = $logo
+  ' "$sample")"
+
+  http DELETE "/api/server/v1/branding-preference?type=APP&name=${app_id}&locale=en-US"
+  http POST "/api/server/v1/branding-preference" "$payload"
+  if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
+    log "applied default-theme branding (logo + copyright) to ${app_id}"
+  else
+    warn "failed to apply generic branding to ${app_id} (HTTP ${HTTP_CODE}): ${HTTP_BODY:0:200}"
   fi
 }
 
@@ -1307,6 +1215,20 @@ set_uaepass_logo() {
 # Orchestrate the full provisioning sequence (waits for the admin API first).
 main() {
   wait_for_admin || return 0
+
+  # Resolve the login-mode flag from master.env (the single source of truth),
+  # not the shell/compose env. An explicitly-exported ENABLE_UAEPASS still wins
+  # (e.g. a manual run); otherwise read config/master.env (mounted under
+  # /workspace) and default to false.
+  if [[ -z "${ENABLE_UAEPASS:-}" ]]; then
+    local _master="/workspace/config/master.env"
+    if [[ -f "$_master" ]]; then
+      ENABLE_UAEPASS="$(grep -E '^ENABLE_UAEPASS=' "$_master" | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+    fi
+    ENABLE_UAEPASS="${ENABLE_UAEPASS:-false}"
+    export ENABLE_UAEPASS
+  fi
+  log "login mode: ENABLE_UAEPASS=${ENABLE_UAEPASS}"
 
   ensure_env_file "$ORCH_ENV_FILE" "$ORCH_ENV_EXAMPLE"
   ensure_env_file "$HR_ENV_FILE" "$HR_ENV_EXAMPLE"
@@ -1445,15 +1367,6 @@ main() {
     "$ORCH_POST_LOGOUT" \
     "authorization_code" "refresh_token"
 
-  local orchestrator_app_id
-  orchestrator_app_id="$(find_app_by_client_id "$ORCH_CLIENT_ID")"
-  if [[ -n "$orchestrator_app_id" ]]; then
-    ensure_authorized_api "$orchestrator_app_id" "$hr_api_id" \
-      "hr_basic_rest" "hr_self_rest" "hr_read_rest" "hr_approve_rest" "hr_assets_write_rest"
-    ensure_authorized_api "$orchestrator_app_id" "$it_api_id" \
-      "it_assets_read_rest" "it_assets_self_rest" "it_assets_write_rest"
-  fi
-
   ensure_service_provider_app \
     "orchestrator-agent-oauth" \
     "$ORCH_AGENT_CLIENT_ID" \
@@ -1478,18 +1391,8 @@ main() {
     "" \
     "authorization_code" "refresh_token" "urn:openid:params:grant-type:ciba"
 
-  local hr_agent_app_id it_agent_app_id
-  hr_agent_app_id="$(find_app_by_client_id "$HR_AGENT_CLIENT_ID")"
-  if [[ -n "$hr_agent_app_id" ]]; then
-    ensure_authorized_api "$hr_agent_app_id" "$hr_api_id" \
-      "hr_basic_rest" "hr_self_rest" "hr_read_rest" "hr_approve_rest" "hr_assets_write_rest"
-  fi
-
-  it_agent_app_id="$(find_app_by_client_id "$IT_AGENT_CLIENT_ID")"
-  if [[ -n "$it_agent_app_id" ]]; then
-    ensure_authorized_api "$it_agent_app_id" "$it_api_id" \
-      "it_assets_read_rest" "it_assets_self_rest" "it_assets_write_rest"
-  fi
+  # NOTE: app-API authorization (and app-id resolution) happens once, later in a
+  # single authoritative pass below — no need to look up / authorize here.
 
   # NOTE: the standalone client-spa app (legacy :3001 SPA) was removed — the
   # browser SPA is served by the orchestrator and authenticates via the
@@ -1584,22 +1487,40 @@ main() {
   ensure_authorized_api "$it_agent_app_id" "$it_api_id" "it_assets_read_rest" "it_assets_self_rest" "it_assets_write_rest"
 
 
-  # UAEPass federated login: create the staging IdP (JIT on), set its logo, and
-  # offer it as a login option on the client SPA alongside local Basic auth.
-  ensure_uaepass_idp
-  set_uaepass_claims
-  set_uaepass_logo
-  # UAE PASS branding on the client SPA's login app only (not org-wide / Console).
-  set_app_branding "$orchestrator_app_id"
-  # The browser SPA (served by the orchestrator at :8090) logs in via the
-  # orchestrator-mcp-client app's /authorize, so UAEPass must be offered there.
-  attach_uaepass_to_app "$orchestrator_app_id"
-  # The agent OAuth apps drive the CIBA consent window. A UAEPass-federated user
-  # has no local password, so their consent flow must also offer UAEPass (and
-  # this lets the IS SSO session from the SPA login be reused -> consent shown
-  # directly instead of a login prompt).
-  attach_uaepass_to_app "$hr_agent_app_id"
-  attach_uaepass_to_app "$it_agent_app_id"
+  # UAEPass federated login + branding — opt-out via ENABLE_UAEPASS=false to run
+  # with a plain "default IAM" experience (local Basic auth only, stock IS
+  # branding, no UAEPass IdP). Default is true to preserve the demo's federated
+  # login story. The connector JAR is always present in the image; this flag
+  # only controls whether it is wired up at bootstrap time.
+  if [[ "${ENABLE_UAEPASS:-false}" == "true" ]]; then
+    log "UAEPass mode: provisioning federated IdP + UAE PASS branding"
+    # UAEPass federated login: create the staging IdP (JIT on), set its logo, and
+    # offer it as a login option on the client SPA alongside local Basic auth.
+    ensure_uaepass_idp
+    set_uaepass_claims
+    set_uaepass_logo
+    # UAE PASS branding on the client SPA's login app only (not org-wide / Console).
+    set_app_branding "$orchestrator_app_id"
+    # The browser SPA (served by the orchestrator at :8090) logs in via the
+    # orchestrator-mcp-client app's /authorize, so UAEPass must be offered there.
+    attach_uaepass_to_app "$orchestrator_app_id"
+    # The agent OAuth apps drive the CIBA consent window. A UAEPass-federated user
+    # has no local password, so their consent flow must also offer UAEPass (and
+    # this lets the IS SSO session from the SPA login be reused -> consent shown
+    # directly instead of a login prompt).
+    attach_uaepass_to_app "$hr_agent_app_id"
+    attach_uaepass_to_app "$it_agent_app_id"
+  else
+    log "default IAM mode (ENABLE_UAEPASS=false): detaching UAEPass; generic branding (logo + copyright)"
+    # Reset every app's login to local Basic auth only — this removes any
+    # "Sign in with UAEPass" option left attached by a prior UAEPass-mode run,
+    # so switching to default IAM works even on an existing IS volume.
+    detach_uaepass_from_app "$orchestrator_app_id"
+    detach_uaepass_from_app "$hr_agent_app_id"
+    detach_uaepass_from_app "$it_agent_app_id"
+    # Only the page logo + copyright — nothing else.
+    set_generic_branding "$orchestrator_app_id"
+  fi
 
   log "bootstrap completed"
 }

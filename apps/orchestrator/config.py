@@ -211,6 +211,11 @@ class OrchestratorConfig:
     # authenticated composer's budget)
     public_chat_llm_timeout_s: float = 5.0
 
+    # Branding: when True the SPA shows UAEPass-flavoured sign-in (button, "Powered
+    # by UAE PASS الهوية الرقمية"); when False it shows generic IAM branding.
+    # Mirrors the bootstrap's ENABLE_UAEPASS so the login page matches the IdP setup.
+    uaepass_enabled: bool = True
+
     # ── Convenience factories ──────────────────────────────────────────────────
 
     def is_client_config(self) -> WSO2ISClientConfig:
@@ -360,6 +365,9 @@ class OrchestratorConfig:
         # Cookie security
         cookie_secure = _parse_bool(env.get("COOKIE_SECURE", "false"))
 
+        # Branding flag (mirrors the IS bootstrap's ENABLE_UAEPASS). Default true.
+        uaepass_enabled = _parse_bool(env.get("ENABLE_UAEPASS", "true"))
+
         logger.info(
             "orchestrator_config_loaded | is_base_url=%s is_browser_base_url=%s hr_agent_url=%s it_agent_url=%s "
             "llm_fallback_mode=%s openai_model=%s port=%d",
@@ -408,6 +416,7 @@ class OrchestratorConfig:
             llm_max_output_tokens=llm_max_output_tokens,
             llm_composer_max_output_tokens=llm_composer_max_output_tokens,
             cookie_secure=cookie_secure,
+            uaepass_enabled=uaepass_enabled,
         )
 
 

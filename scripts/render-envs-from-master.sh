@@ -83,6 +83,9 @@ upsert_env "$ORCH_ENV" OPENAI_API_HEADER "${OPENAI_API_HEADER:-api-key}"
 upsert_env_if_nonempty "$ORCH_ENV" OPENAI_API_KEY "${OPENAI_API_KEY:-}"
 upsert_env "$ORCH_ENV" OPENAI_MODEL "${OPENAI_MODEL:-gpt-4.1}"
 upsert_env "$ORCH_ENV" LLM_FALLBACK_MODE "${LLM_FALLBACK_MODE:-keyword}"
+# Feature flag (single source of truth: master.env). Drives the SPA sign-in
+# branding via /api/app-config. Defaults to false (stock, no UAEPass).
+upsert_env "$ORCH_ENV" ENABLE_UAEPASS "${ENABLE_UAEPASS:-false}"
 upsert_env "$ORCH_ENV" ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
 upsert_env_if_nonempty "$ORCH_ENV" AMP_OTEL_ENDPOINT "${AMP_OTEL_ENDPOINT:-}"
 upsert_env_if_nonempty "$ORCH_ENV" AMP_AGENT_API_KEY "${AMP_AGENT_API_KEY:-}"

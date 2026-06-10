@@ -4,7 +4,7 @@
 
 | Component | Tech | Responsibility |
 |---|---|---|
-| **WSO2 IS 7.3+** | Java/OSGi | OAuth2/OIDC provider, CIBA grant, federation (UAEPass), roles→scopes, branding. Version set via `ARG WSO2IS_VERSION` in `wso2-is/Dockerfile` (the `wso2is-<version>.zip` is downloaded into `wso2-is/pack/`). |
+| **WSO2 IS 7.3+** | Java/OSGi | OAuth2/OIDC provider, CIBA grant, federation (UAEPass), roles→scopes, branding. Version set via `ARG WSO2IS_VERSION` in `wso2-is/Dockerfile` (pulls the official `wso2/wso2is:<version>-alpine` image from Docker Hub). |
 | **orchestrator** | FastAPI | Serves the SPA; BFF login (Pattern C); chat router + composer; A2A client; SSE to the browser; reports proxy; **agents panel** (fleet status + token termination) and **trace** (under-the-hood HTTP capture). Confidential OAuth client `orchestrator-mcp-client`. |
 | **hr_agent / it_agent** | FastAPI | Specialist agents. Receive A2A calls, run **CIBA** to obtain on-behalf-of tokens, call their resource server via **MCP**. Each is its own OAuth client (`hr-agent-oauth` / `it-agent-oauth`) + WSO2 "Agent" identity. |
 | **hr_server / it_server** | FastAPI | Resource servers. Expose **MCP tools** (`/mcp/tools/*`) and **REST** (`/api/me/*`, `/api/reports/*`). Enforce the F-04 six-step token validation. In-memory data stores. |

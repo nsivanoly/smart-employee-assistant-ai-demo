@@ -48,38 +48,24 @@ Browser SPA ──(BFF login, Pattern C)──► Orchestrator ──A2A──�
 | **Memory** | The container VM needs **≥ 8 GB** — WSO2 IS alone needs ~1.5–2 GB. On Colima: `colima start --memory 8 --cpu 4`. |
 | **`docker compose`** or **`docker-compose`** | `start.sh` auto-detects either. |
 | **Outbound internet** | Required for image pulls, LLM calls, and (optionally) UAEPass staging. |
-| **The WSO2 IS pack** | You must **download** the IS distribution zip and place it in `wso2-is/` — see below. It is **git-ignored** (~400 MB, too large to commit). |
+| **WSO2 IS image** | Pulled automatically from Docker Hub (`wso2/wso2is:7.3.0-alpine`) on first build — **no manual download required.** |
 
 Optional (only if `LLM_FALLBACK_MODE=llm`): an OpenAI-compatible API key. The default
 mode is `keyword`, which needs no LLM.
 
-### Download the WSO2 Identity Server pack (required)
+### WSO2 Identity Server image (pulled automatically)
 
-The build needs the IS distribution zip. **Version must be 7.3.0 or newer.**
+The IS server is built on top of the **official `wso2/wso2is:<version>-alpine`
+image from Docker Hub** — Docker pulls it on first build, so there is no zip to
+download. **Version must be 7.3.0 or newer.**
 
-1. Download `wso2is-<version>.zip` from one of:
-   - https://wso2.com/identity-server/
-   - https://github.com/wso2/product-is/releases
-2. Place it **inside `wso2-is/pack/`** keeping the original filename, e.g.:
-   ```
-   wso2-is/pack/wso2is-7.3.0.zip      # default
-   wso2-is/pack/wso2is-7.4.0.zip      # a newer release
-   ```
-3. **If you use a version other than 7.3.0**, set the version so the build picks the
-   right file — either:
-   - **env override (no edits):** `WSO2IS_VERSION=7.4.0 ./start.sh`, or
-   - **edit the Dockerfile directly:** change the one line in
-     `wso2-is/Dockerfile`:
-     ```dockerfile
-     ARG WSO2IS_VERSION=7.4.0
-     ```
-   That single value drives both the `COPY pack/wso2is-<version>.zip` and the unpack
-   step — nothing else to change.
-
-```bash
-# verify the pack is in place before starting
-ls wso2-is/pack/wso2is-*.zip
-```
+To use a version other than 7.3.0 (the matching tag must exist on
+[Docker Hub](https://hub.docker.com/r/wso2/wso2is/tags)):
+- **env override (no edits):** `WSO2IS_VERSION=7.4.0 ./start.sh`, or
+- **edit the Dockerfile directly:** change the one line in `wso2-is/Dockerfile`:
+  ```dockerfile
+  ARG WSO2IS_VERSION=7.4.0
+  ```
 
 > The UAEPass connector in this repo is recompiled for IS 7.3 / Nimbus 10. If a much
 > newer IS ships a different Nimbus major, the connector may need re-compiling — see
@@ -90,22 +76,36 @@ ls wso2-is/pack/wso2is-*.zip
 ## Quick start
 
 ```bash
-# 1. Download the WSO2 IS pack (>= 7.3.0) into wso2-is/pack/ — see
-#    "Download the WSO2 Identity Server pack" above. Verify:
-ls wso2-is/pack/wso2is-*.zip
-
-# 2. Start everything (builds images, boots WSO2 IS, runs bootstrap,
-#    generates env files, then starts the full stack)
+# 1. Start everything (pulls the WSO2 IS image, builds the app images,
+#    boots WSO2 IS, runs bootstrap, generates env files, starts the stack)
 ./start.sh
 #    (for a non-default IS version: WSO2IS_VERSION=7.4.0 ./start.sh)
 
-# 3. Open the app
+# 2. Open the app
 open http://localhost:8090
 ```
 
-`start.sh`:
+`start.sh` interactively prompts for a build option, a cleanup option, and a
+**login mode**:
+
+| Login mode | What you get |
+|---|---|
+| **UAEPass** (default) | "Sign in with UAEPass" federated login + UAE PASS branding on the IS login page **and** the SPA (UAE PASS button, "Powered by UAE PASS · الهوية الرقمية"), alongside local Basic auth. |
+| **Default IAM** | Plain WSO2 IS — local Basic auth only, no UAEPass IdP. The IS login page gets neutral **Smart Employee** branding (Smart Employee logo + "© {{currentYear}} Smart Employee" copyright over WSO2's default theme). The SPA also drops the UAE PASS branding: generic "Sign in" button, "Secured by WSO2 Identity Server", and "Smart Employee Assistant" titles. |
+
+The SPA reads the mode at load via `GET /api/app-config` (the orchestrator
+mirrors the same `ENABLE_UAEPASS` flag), so its branding always matches the IdP
+setup.
+
+Skip the prompt non-interactively with `ENABLE_UAEPASS=true ./start.sh` (or
+`=false`). The UAEPass connector is always present in the image; this flag only
+controls whether the bootstrap wires it up. **Switching modes takes effect on a
+clean start** (cleanup option 1) — an existing IS volume keeps whatever was
+already provisioned.
+
+`start.sh` then:
 1. Starts the Docker runtime (auto-`colima start` if needed).
-2. Builds + boots **WSO2 IS**, which runs the **bootstrap** (`scripts/bootstrap-wso2is-entrypoint.sh`) to create OAuth apps, API resources, scopes, roles, demo users, the UAEPass IdP, and branding.
+2. Builds + boots **WSO2 IS**, which runs the **bootstrap** (`scripts/bootstrap-wso2is-entrypoint.sh`) to create OAuth apps, API resources, scopes, roles, demo users, and — in UAEPass mode — the UAEPass IdP and branding.
 3. Generates `config/master.env` from the live IS, prompts for `OPENAI_API_KEY` / `AMP_AGENT_API_KEY` (press Enter to skip), and renders per-service `.env` files.
 4. Builds + starts the five application services.
 
@@ -326,7 +326,10 @@ The stack ships the UAEPass OIDC connector (recompiled for IS 7.3 / Nimbus 10) a
 bootstrap configures a **staging** UAEPass IdP with **JIT provisioning** that maps the
 federated user to a local account by email, so federated users inherit local roles/scopes.
 Branding (logo, colours, uaepass.ae links) is applied **only to the client app's login
-page**, not the whole IS Console.
+page**, not the whole IS Console. Both modes build on WSO2's full default theme
+(`wso2-is/default/sample-payload.json`) so the page is always fully styled — UAEPass
+mode overlays the UAE PASS logo/title/colour/links, default-IAM mode overlays only the
+Smart Employee logo and copyright.
 
 Full details and the design rationale: **[docs/UAEPASS.md](docs/UAEPASS.md)**.
 
@@ -345,8 +348,7 @@ srt-emp/
 │   ├── it_server/        # IT resource server: MCP tools + REST, F-04 JWT validator, in-memory store
 │   └── client/           # SPA source (app.js/index.html/styles.css) — served BY the orchestrator
 ├── libs/common/          # Shared: a2a/, auth/ (CIBA, JWT, actor tokens, peer trust), logging, revocation
-├── wso2-is/         # IS image build context (multi-stage Dockerfile, ARG WSO2IS_VERSION)
-│   ├── pack/             #   ↳ download wso2is-<version>.zip here (>= 7.3.0; gitignored)
+├── wso2-is/         # IS image build context (Dockerfile FROM wso2/wso2is:<ver>-alpine)
 │   ├── uaepass/          #   UAEPass connector JAR, error JSP, logo (committed build inputs)
 │   └── entrypoint/       #   custom-entrypoint.sh (starts IS + runs bootstrap)
 ├── scripts/              # bootstrap-wso2is-entrypoint.sh, render-envs / generate-master-env,

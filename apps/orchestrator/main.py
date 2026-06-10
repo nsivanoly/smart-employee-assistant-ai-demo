@@ -666,6 +666,17 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         """
         return {"ok": True, "service": "orchestrator"}
 
+    @app.get("/api/app-config")
+    async def app_config() -> dict:
+        """Public, unauthenticated SPA bootstrap config.
+
+        The SPA fetches this before rendering the sign-in page so its branding
+        matches the IdP setup. ``uaepass_enabled`` mirrors the IS bootstrap's
+        ``ENABLE_UAEPASS`` flag: True → UAEPass sign-in + "Powered by UAE PASS";
+        False → generic IAM branding. No secrets in the response.
+        """
+        return {"uaepass_enabled": cfg.uaepass_enabled}
+
     # ── SPA static mount (last so API routes take priority) ───────────────────
     _spa_dir = Path("/app/client_static")
     if _spa_dir.is_dir():

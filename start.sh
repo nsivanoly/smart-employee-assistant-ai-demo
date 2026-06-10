@@ -11,7 +11,9 @@
 #   4. Build + (re)create the five Python services and verify that the secrets
 #      rendered into each .env actually reached the running container.
 #
-# Env overrides: WSO2IS_VERSION, IS_ADMIN_USER/PASS, RUN_MANUAL_BOOTSTRAP=1.
+# Env overrides: WSO2IS_VERSION, IS_ADMIN_USER/PASS, RUN_MANUAL_BOOTSTRAP=1,
+#   ENABLE_UAEPASS=true|false (skips the login-mode prompt; true = UAEPass
+#   federated login + branding, false = plain default IAM).
 # Shared helpers (compose detection, env read/write) live in scripts/lib/common.sh.
 set -euo pipefail
 
@@ -202,6 +204,38 @@ case "$cleanup_choice" in
     ;;
 esac
 
+# Login mode: UAEPass federated login + branding, or plain default IAM.
+# config/master.env (ENABLE_UAEPASS, default false) is the SINGLE SOURCE OF TRUTH:
+# the IS bootstrap reads it from the mounted master.env and the orchestrator gets
+# it rendered into its .env — neither relies on a shell/compose env var.
+# Precedence: a pre-set ENABLE_UAEPASS env (non-interactive) wins and is written
+# back to master.env; otherwise the prompt default comes from master.env.
+if [[ -z "${ENABLE_UAEPASS:-}" ]]; then
+  _uaepass_default="$(read_env ENABLE_UAEPASS "$MASTER_ENV" 2>/dev/null || true)"
+  [[ "$_uaepass_default" == "true" ]] || _uaepass_default="false"
+  echo "🔐 Choose login mode (default from master.env: ENABLE_UAEPASS=${_uaepass_default}):"
+  echo "  1) UAEPass     (UAEPass federated login + UAE PASS branding)"
+  echo "  2) Default IAM (local Basic auth only, neutral Smart Employee branding)"
+  read -r -p "Select login mode [1-2] (Enter = keep default): " login_choice
+  case "$login_choice" in
+    1) ENABLE_UAEPASS="true" ;;
+    2) ENABLE_UAEPASS="false" ;;
+    "") ENABLE_UAEPASS="$_uaepass_default" ;;
+    *) echo "Invalid login mode" >&2; exit 1 ;;
+  esac
+fi
+# Persist the resolved value into master.env so it's the source of truth that the
+# IS bootstrap (reads master.env) and render step (orchestrator .env) consume.
+upsert_env "$MASTER_ENV" ENABLE_UAEPASS "$ENABLE_UAEPASS"
+# Export too as a fallback for host-side steps (e.g. RUN_MANUAL_BOOTSTRAP) — the
+# container itself reads master.env, not this shell var.
+export ENABLE_UAEPASS
+if [[ "$ENABLE_UAEPASS" == "true" ]]; then
+  echo "Login mode: UAEPass (federated login + branding)."
+else
+  echo "Login mode: default IAM (local Basic auth, Smart Employee branding)."
+fi
+
 if [[ ! -f "$MASTER_TEMPLATE" ]]; then
   echo "Missing master template: $MASTER_TEMPLATE" >&2
   exit 1
@@ -238,4 +272,3 @@ verify_runtime_env_sync || {
 
 echo
 echo "Stack started."
-echo "WSO2 bootstrap: automatic via wso2is custom entrypoint."

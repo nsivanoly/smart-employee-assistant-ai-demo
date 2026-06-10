@@ -3,13 +3,13 @@
 Symptom → cause → fix. Most issues here were hit during bring-up and are now
 prevented by the bootstrap, but they recur if the environment drifts.
 
-## Build fails: `COPY pack/wso2is-<version>.zip … not found` / `"/pack/wso2is-7.3.0.zip": not found`
-**Cause:** the WSO2 IS pack isn't in `wso2-is/pack/`, or its filename doesn't match
-the configured version.
-**Fix:** download `wso2is-<version>.zip` (≥ 7.3.0) into `wso2-is/pack/` (keep the
-original filename). If it's not 7.3.0, set the version to match the file — either
+## Build fails: `manifest for wso2/wso2is:<version>-alpine not found` / pull error
+**Cause:** the configured `WSO2IS_VERSION` has no matching `-alpine` tag on Docker
+Hub, or there's no outbound internet to pull the image.
+**Fix:** pick a version whose tag exists on
+[Docker Hub](https://hub.docker.com/r/wso2/wso2is/tags) (≥ 7.3.0) — either
 `WSO2IS_VERSION=7.4.0 ./start.sh` or edit `ARG WSO2IS_VERSION` in
-`wso2-is/Dockerfile`. Verify: `ls wso2-is/pack/wso2is-*.zip`.
+`wso2-is/Dockerfile`. Verify connectivity: `docker pull wso2/wso2is:7.3.0-alpine`.
 
 ## WSO2 IS container exits with `Killed` (OOM)
 **Cause:** the Docker VM has too little RAM; the IS JVM is OOM-killed (`OOMKilled: true`).
